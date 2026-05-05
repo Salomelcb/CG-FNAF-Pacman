@@ -3,10 +3,42 @@
 <head>
     <meta charset="UTF-8">
     <title>FNAF Pac-Man Project</title>
-    <style> body { margin: 0; overflow: hidden; } </style>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+        }
+
+        /* MENU */
+        #menu {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            z-index: 10;
+        }
+
+        .botao {
+            width: 300px;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+
+        .botao:hover {
+            transform: scale(1.1);
+        }
+    </style>
 </head>
+
+
 <body>
+
+    <!-- THREE JS -->
     <script async src="https://unpkg.com/es-module-shims@1.8.0/dist/es-module-shims.js"></script>
+
     <script type="importmap">
     {
         "imports": {
@@ -15,6 +47,8 @@
         }
     }
     </script>
+
     <script type="module" src="./JavaScript/appThree.js"></script>
+
 </body>
 </html>

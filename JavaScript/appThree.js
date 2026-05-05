@@ -1,152 +1,179 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
-let cena, camara, renderer;
-let pizza; 
+let cena, camara, renderer, lanterna, alvoLanterna;
+
+let raycaster = new THREE.Raycaster();
+let mouse = new THREE.Vector2();
+let botoes = [];
+
+let btnStart, btnOptions, btnExit;
+let parede1, parede2;
 
 document.addEventListener('DOMContentLoaded', Start);
 
 function Start() {
-    // 1. Cena e Câmara 
+
     cena = new THREE.Scene();
-    cena.background = new THREE.Color(0x050505);
+    cena.background = new THREE.Color(0x000000);
 
     camara = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-    camara.position.set(0, 5, 10);
+    camara.position.set(-18.36, 7.75, 0.13);
+    camara.lookAt(0, 5, 0);
 
-    // 2. Renderer
     renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.toneMapping = THREE.ReinhardToneMapping;
     document.body.appendChild(renderer.domElement);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
 
-    // 3. Luzes 
-    const luzAmbiente = new THREE.AmbientLight(0xffffff, 0.6);
+    const luzAmbiente = new THREE.AmbientLight(0x404040, 0.6);
     cena.add(luzAmbiente);
 
-    const luzPonto = new THREE.PointLight(0xff0000, 1, 100);
-    luzPonto.position.set(0, 5, 0);
-    cena.add(luzPonto);
+    lanterna = new THREE.SpotLight(0xffffff, 250); 
+    lanterna.angle = 0.6;
+    lanterna.penumbra = 0.8;
+    lanterna.decay = 2;
+    lanterna.distance = 150;
 
-    // 4. Carregar o Mapa GLB
+    alvoLanterna = new THREE.Object3D();
+    cena.add(alvoLanterna);
+    lanterna.target = alvoLanterna;
+
+    cena.add(lanterna);
+
     const loader = new GLTFLoader();
-    //loader.load('./Models/fnaf_pizzeria.glb', function(gltf) {
-    //    cena.add(gltf.scene);
-    //});
 
-    // 5. CHAMADA DA FUNÇÃO DO OBJETO COMPLEXO
-    pizza = criarFatiaPizza();
-    pizza.position.set(0, 1, 0);
-    cena.add(pizza);
+    loader.load('./Models/scene.glb', function (gltf) {
 
+        const modelo = gltf.scene;
+        cena.add(modelo);
+
+        parede1 = modelo.getObjectByName("mesh_1");
+        parede2 = modelo.getObjectByName("mesh_3");
+
+        const geoPupila = new THREE.SphereGeometry(0.12, 16, 16);
+
+        const matPupila = new THREE.MeshBasicMaterial({
+            color: 0xffffff,
+            depthTest: false,
+            transparent: true
+        });
+
+        const pupilaE = new THREE.Mesh(geoPupila, matPupila);
+        const pupilaD = new THREE.Mesh(geoPupila, matPupila);
+
+        pupilaE.renderOrder = 999;
+        pupilaD.renderOrder = 999;
+
+        // POSIÇÕES
+        pupilaE.position.set(17.30, 12.70, 12.20);
+        pupilaD.position.set(16.45, 12.60, 12.90);
+
+        cena.add(pupilaE);
+        cena.add(pupilaD);
+
+        console.log("👀 Eyes locked!");
+
+        // BOTÕES
+        criarBotoes();
+
+        console.log("Mapa + tudo carregado!");
+    });
+
+    // EVENTOS
     window.addEventListener('resize', onWindowResize);
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('click', onClick);
+
     loop();
 }
 
-/*
- * Construção de objeto complexo com primitivas 
- * Aqui usamos um Grupo para juntar várias mmesh
- */
+function criarBotoes() {
 
+    const textureLoader = new THREE.TextureLoader();
 
-function criarFatiaPizza() {
-    const grupoPizza = new THREE.Group();
+    function criarBotao(texturePath, parent, x, y) {
 
-    // 1. A MASSA (Base) - Triângulo
-    const geoMassa = new THREE.CylinderGeometry(1, 1, 0.2, 3);
-    const matMassa = new THREE.MeshStandardMaterial({ 
-        color: 0xcc9966, 
-        roughness: 0.9 
-    }); 
-    const massa = new THREE.Mesh(geoMassa, matMassa);
-    grupoPizza.add(massa);
+        const textura = textureLoader.load(texturePath);
 
-    // 2. A CÔDEA (Borda arredondada atrás)
-    const geoBorda = new THREE.TorusGeometry(0.85, 0.12, 12, 12, Math.PI / 1.5);
-    const matBorda = new THREE.MeshStandardMaterial({ 
-        color: 0x8b4513,
-        roughness: 0.8 
-    });
-    const borda = new THREE.Mesh(geoBorda, matBorda);
-    borda.rotation.x = Math.PI / 2;
-    borda.rotation.z = Math.PI / 0.88; 
-    borda.position.set(0, 0.1, -0.4); 
-    grupoPizza.add(borda);
+        textura.minFilter = THREE.LinearFilter;
+        textura.magFilter = THREE.LinearFilter;
+        textura.anisotropy = renderer.capabilities.getMaxAnisotropy();
 
-    // 3. O QUEIJO 
-    const geoQueijo = new THREE.CylinderGeometry(0.92, 0.92, 0.1, 3);
-    const matQueijo = new THREE.MeshStandardMaterial({ 
-        color: 0xffcc33, 
-        roughness: 0.3,
-        metalness: 0.1 
-    });
-    const queijo = new THREE.Mesh(geoQueijo, matQueijo);
-    queijo.position.y = 0.08; 
-    grupoPizza.add(queijo);
+        const material = new THREE.MeshStandardMaterial({
+            map: textura,
+            transparent: true,
+            emissive: 0xffffff,
+            emissiveMap: textura,
+            emissiveIntensity: 2
+        });
 
-    // 3.1 GOTAS DE QUEIJO 
-    const geoGota = new THREE.SphereGeometry(0.08, 8, 8);
-    const posGotas = [
-        {x: 0.4, y: 0, z: 0.5},
-        {x: -0.3, y: -0.1, z: 0.6},
-        {x: 0, y: -0.15, z: 0.9}
-    ];
+        const geometry = new THREE.PlaneGeometry(3.5, 1.5);
+        const botao = new THREE.Mesh(geometry, material);
 
-    posGotas.forEach(p => {
-        const gota = new THREE.Mesh(geoGota, matQueijo);
-        gota.position.set(p.x, p.y, p.z);
-        gota.scale.set(0.6, 1.5, 0.6); // Esticar para parecer que escorre
-        grupoPizza.add(gota);
-    });
+        parent.add(botao);
 
-    // 4. PEPPERONIS 
-    const geoPep = new THREE.CylinderGeometry(0.18, 0.18, 0.05, 8);
-    const matPep = new THREE.MeshStandardMaterial({ 
-        color: 0xad2a1a, 
-        roughness: 0.5 
-    });
+        botao.position.set(x, y, 1.2);
+        botao.rotation.y = Math.PI;
 
-    const posicoesPep = [
-        {x: 0.3, z: 0.1, r: 0.5}, 
-        {x: -0.2, z: 0.4, r: 1.2}, 
-        {x: -0.1, z: -0.3, r: 0}, 
-        {x: 0.4, z: -0.4, r: 2.1}
-    ];
+        return botao;
+    }
 
-    posicoesPep.forEach(pos => {
-        const p = new THREE.Mesh(geoPep, matPep);
-        p.position.set(pos.x, 0.14, pos.z);
-        p.rotation.y = pos.r; 
-        grupoPizza.add(p);
-    });
+    btnPACMAN  = criarBotao('Textures/pacman.png', parede1, 0, 3);
+    btnStart   = criarBotao('Textures/comecar.png', parede1, 0, 1);
+    btnOptions = criarBotao('Textures/opcoes.png', parede1, 0, -1);
+    btnExit    = criarBotao('Textures/sair.png', parede1, 0, -3);
 
-    // 5. AZEITONAS
-    const geoAzeitona = new THREE.TorusGeometry(0.06, 0.03, 10, 20);
-    const matAzeitona = new THREE.MeshStandardMaterial({ 
-        color: 0x111111, 
-        roughness: 0.2 
-    });
-    
-    const azPos = [{x: -0.4, z: -0.1}, {x: 0.1, z: 0.2}];
-    azPos.forEach(pos => {
-        const az = new THREE.Mesh(geoAzeitona, matAzeitona);
-        az.rotation.x = Math.PI / 2;
-        az.position.set(pos.x, 0.14, pos.z);
-        grupoPizza.add(az);
-    });
-
-    return grupoPizza;
+    botoes.push(btnStart, btnOptions, btnExit, btnPACMAN);
 }
+
+// 
+function onClick(event) {
+
+    mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+    mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+    raycaster.setFromCamera(mouse, camara);
+
+    const intersects = raycaster.intersectObjects(botoes, true);
+
+    if (intersects.length > 0) {
+
+        const objeto = intersects[0].object;
+
+        if (objeto === btnStart) console.log("COMEÇAR JOGO");
+        if (objeto === btnOptions) console.log("OPÇÕES");
+        if (objeto === btnExit) console.log("SAIR");
+    }
+}
+
+
+function onMouseMove(event) {
+
+    let x = (event.clientX / window.innerWidth) * 2 - 1;
+    let y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+    let vetor = new THREE.Vector3(x, y, 0.5);
+    vetor.unproject(camara);
+
+    let direcao = vetor.sub(camara.position).normalize();
+
+    let alvo = camara.position.clone().add(direcao.multiplyScalar(20));
+    alvoLanterna.position.copy(alvo);
+}
+
 
 function loop() {
     requestAnimationFrame(loop);
-    
-    // Animação simples para mostrar que é um objeto 3D
-    if (pizza) {
-        pizza.rotation.y += 0.01;
+
+    if (lanterna) {
+        lanterna.position.copy(camara.position);
     }
 
     renderer.render(cena, camara);
 }
+
 
 function onWindowResize() {
     camara.aspect = window.innerWidth / window.innerHeight;
