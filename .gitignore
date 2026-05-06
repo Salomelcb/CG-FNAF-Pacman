@@ -1,3 +1,6 @@
+# Three.js source (2GB+ - usar via npm ou CDN)
+three.js/
+
 # Logs
 logs
 *.log
