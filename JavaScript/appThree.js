@@ -3,6 +3,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { criarMenuNeon } from './menu.js';
 import { criarTelaDificuldade } from './dificuldade.js';
 import { criarObjetosComplexos } from './objetos.js';
+import { iniciarJogo } from './jogo.js';
 
 let cena, camara, renderer, lanterna, alvoLanterna;
 let raycaster = new THREE.Raycaster();
@@ -10,11 +11,14 @@ let mouse = new THREE.Vector2();
 let hoveredBtn = null;
 let alvoCameraSmooth = new THREE.Vector3(0, 5, 0);
 let alvoCameraAlvo   = new THREE.Vector3(0, 5, 0);
-const CAM_BASE      = new THREE.Vector3(-18.36, 7.75, 0.13);
-const CAM_DUTO_ALVO = new THREE.Vector3(-3, 5.8, 0.1);
+const CAM_BASE       = new THREE.Vector3(-18.36, 7.75, 0.13);
+const CAM_DUTO_ALVO  = new THREE.Vector3(-3, 5.8, 0.1);
+const CAM_SAIDA_ALVO = new THREE.Vector3(4, 4.5, 0.1); // destino da animacao de saida
 
-let estadoAtual = 'menu'; // 'menu' | 'entrar_duto' | 'dificuldade'
+let estadoAtual = 'menu'; // 'menu' | 'entrar_duto' | 'dificuldade' | 'sair_duto' | 'jogo'
+let loopAtivo = true;
 let progressoEntrada = 0;
+let progressoSaida   = 0;
 let tempoAnterior = null;
 let fadeOverlay = null;
 
@@ -161,7 +165,14 @@ function Start() {
 
     initInspRenderer();
 
-    const dif        = criarTelaDificuldade();
+    const dif        = criarTelaDificuldade((_nivel) => {
+        loopAtivo = false;
+        // NAO por o fadeOverlay a preto — a loading screen do jogo tem background proprio
+        // o overlay ficaria por cima do canvas e bloquearia tudo
+        fadeOverlay.style.transition = 'none';
+        fadeOverlay.style.opacity    = '0';
+        iniciarJogo(renderer);
+    });
     telaDificuldade  = dif.telaDificuldade;
     iniciarRuidoDuto = dif.iniciarRuidoDuto;
 
@@ -267,6 +278,7 @@ function fecharInspecao() {
 }
 
 function loop() {
+    if (!loopAtivo) return;
     requestAnimationFrame(loop);
     if (lanterna) lanterna.position.copy(camara.position);
 
@@ -329,6 +341,31 @@ function loop() {
             objetosCena.cupcake.grupo.rotation.y += delta * 1.4;
         }
         rendererInsp.render(cenaInsp, camaraInsp);
+    }
+
+    // animacao de saida do duto → fade preto → jogo
+    if (estadoAtual === 'sair_duto') {
+        progressoSaida += delta / 2.2;
+        progressoSaida = Math.min(progressoSaida, 1);
+
+        const t = 1 - Math.pow(1 - progressoSaida, 2); // ease-out
+        camara.position.lerpVectors(CAM_DUTO_ALVO, CAM_SAIDA_ALVO, t);
+        camara.lookAt(0, 4, 0);
+
+        if (progressoSaida > 0.55) {
+            const f = (progressoSaida - 0.55) / 0.45;
+            fadeOverlay.style.opacity = f.toFixed(3);
+        }
+
+        if (progressoSaida >= 1) {
+            loopAtivo = false;
+            fadeOverlay.style.transition = 'opacity 0.9s ease';
+            fadeOverlay.style.opacity    = '0';
+            iniciarJogo(renderer);
+        }
+
+        renderer.render(cena, camara);
+        return;
     }
 
     if (estadoAtual === 'entrar_duto') {
