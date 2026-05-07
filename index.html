@@ -50,5 +50,34 @@
 
     <script type="module" src="./JavaScript/appThree.js"></script>
 
+    <!-- overlay de inspeção do objeto -->
+    <div id="inspecao-overlay" style="
+        display: none;
+        position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+        pointer-events: none; z-index: 8;
+        flex-direction: column; align-items: center; justify-content: flex-start;
+    ">
+        <div id="inspecao-titulo" style="
+            margin-top: 6%;
+            color: #ffffff;
+            font-family: Arial, sans-serif;
+            font-size: 1.9em;
+            font-weight: bold;
+            text-shadow: 0 2px 8px rgba(0,0,0,0.9);
+            text-align: center;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            opacity: 0;
+            line-height: 2.2;
+        ">
+            <span style="font-size:0.6em; font-weight:400; color:#dddddd; letter-spacing:0.03em;">
+                O companheiro inseparável de Chica
+            </span><br>
+            <span style="font-size:0.45em; font-weight:300; color:#999999; letter-spacing:0.02em;">
+                clica fora para fechar
+            </span>
+        </div>
+    </div>
+
 </body>
 </html>
