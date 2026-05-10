@@ -29,8 +29,26 @@ let totalTokens     = 0;
 let elapsedTime     = 0;
 
 let canvasMapa = null, ctxMapa = null;
+let luzesFlicker = [];
+
+// intro camera (sair do duto para o escritorio)
+let introCamera   = false;
+let introProgress = 0;
+const introStart  = new THREE.Vector3();
+const introEnd    = new THREE.Vector3();
+
+// mouse para a lanterna
+let mouseOffX = 0;
+let mouseOffY = 0;
+let luzAlvo   = null;
 
 export function iniciarJogo(renderer) {
+    window.addEventListener('mousemove', e => {
+        // -1 a 1 normalizado, Y invertido (topo do ecra = olhar para cima)
+        mouseOffX =  (e.clientX / window.innerWidth  - 0.5) * 0.55;
+        mouseOffY = -(e.clientY / window.innerHeight - 0.5) * 0.40;
+    });
+
     document.addEventListener('keydown', e => {
         keys[e.code] = true;
         if (e.code === 'KeyA') targetAngle += Math.PI / 2;
@@ -52,8 +70,21 @@ export function iniciarJogo(renderer) {
     renderer.shadowMap.enabled   = false;
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
 
-    luzAmbiente = new THREE.AmbientLight(0xffffff, 1.2);
+    luzAmbiente = new THREE.AmbientLight(0xffeedd, 0);
     cenaJogo.add(luzAmbiente);
+
+    // lanterna presa à camara — segue o mouse
+    const lanterna = new THREE.SpotLight(0xfff5dd, 60);
+    lanterna.angle    = 0.36;
+    lanterna.penumbra = 0.50;
+    lanterna.decay    = 1.8;
+    lanterna.distance = 24;
+    luzAlvo = new THREE.Object3D();
+    luzAlvo.position.set(0, 0.0, -1); // aponta a frente, centrado
+    camaraJogo.add(lanterna);
+    camaraJogo.add(luzAlvo);
+    lanterna.target = luzAlvo;
+    cenaJogo.add(camaraJogo);
 
     // loading screen
     const loadDiv = criarLoadingScreen();
@@ -81,21 +112,40 @@ export function iniciarJogo(renderer) {
         const size   = box.getSize(new THREE.Vector3());
         const center = box.getCenter(new THREE.Vector3());
 
-        // escritorio confirmado em X:0, Z:2 (exploracao do utilizador)
+        // escritorio: X:0, Z:2 — virado para o computador (sul, angulo PI)
         playerPos.set(0.0, box.min.y, 2.0);
-        playerAngle = Math.PI; // virado para os corredores (sul)
+        playerAngle = Math.PI;
         targetAngle = Math.PI;
 
-        // guarda limites do mapa para colisao de bordas
         mapaMin.copy(box.min);
         mapaMax.copy(box.max);
-        console.log(`MAPA min(${box.min.x.toFixed(1)},${box.min.z.toFixed(1)}) max(${box.max.x.toFixed(1)},${box.max.z.toFixed(1)}) center(${center.x.toFixed(1)},${center.z.toFixed(1)})`);
 
-        // esconde loading e inicia efeito acordar
+        // luzes do teto — mais estragadas, mais dramaticas
+        const ceilY = box.max.y - 0.3;
+        [
+            [0,   2.0, false], [0,  -8.0, true ],  [5,  -10.0, true ],
+            [-3, -12.0, true],  [2, -18.0, false],  [0,  -25.0, true ],
+            [-5, -20.0, true],  [4,   -6.0, false], [0,  -15.0, true ],
+            [6,  -18.0, false], [-4,  -8.0, true ],
+        ].forEach(([lx, lz, estragada]) => {
+            const luz = new THREE.PointLight(0xffeedd, 0, 16);
+            luz.position.set(lx, ceilY, lz);
+            cenaJogo.add(luz);
+            luzesFlicker.push({ luz, fase: Math.random() * Math.PI * 2, estragada });
+        });
+
         loadDiv.style.opacity = '0';
         setTimeout(() => {
             loadDiv.remove();
-            acordando = true;
+            const ov = document.getElementById('fnaf-overlay');
+            if (ov) { ov.style.transition = 'none'; ov.style.opacity = '0'; }
+            // sai do duto a avancar: comeca atras (norte/cacifos, Z+), olha para sul (desk), avanca
+            introStart.set(playerPos.x, playerPos.y + 0.3, playerPos.z + 2.5);
+            introEnd.set(  playerPos.x, playerPos.y + EYE_HEIGHT, playerPos.z);
+            introCamera   = true;
+            introProgress = 0;
+            // flicker de luzes simultaneo
+            acordando        = true;
             acordarProgresso = 0;
         }, 820);
     },
@@ -124,19 +174,32 @@ export function iniciarJogo(renderer) {
         elapsedTime += delta;
 
         if (acordando) {
-            acordarProgresso = Math.min(1, acordarProgresso + delta * 0.38);
+            acordarProgresso = Math.min(1, acordarProgresso + delta * 0.42);
             const t = acordarProgresso;
-            if (t < 0.65) {
-                // flicker rapido como fluorescente a acender
-                luzAmbiente.intensity = (Math.sin(t * 62) > 0.1) ? 1.6 : 0.04;
+            if (t < 0.72) {
+                // mesmo padrao do duto: produto de dois senos com frequencias diferentes
+                const flick = Math.sin(t * 45) * Math.sin(t * 23 + 1.1);
+                luzAmbiente.intensity = flick > 0 ? 1.4 + flick * 0.5 : 0.03;
             } else {
-                // estabiliza gradualmente
-                luzAmbiente.intensity = 0.25 + ((t - 0.65) / 0.35) * 0.95;
+                luzAmbiente.intensity = 0.04 + ((t - 0.72) / 0.28) * 0.08;
             }
             if (acordarProgresso >= 1) {
-                luzAmbiente.intensity = 1.2;
+                luzAmbiente.intensity = 0.06;
                 acordando = false;
             }
+        }
+        // luzes de cena sempre a actualizar
+        atualizarLuzesFlicker(elapsedTime);
+
+        // animacao de entrada — curta e suave (1.5s)
+        if (introCamera) {
+            introProgress = Math.min(1, introProgress + delta / 1.5);
+            const ease = 1 - Math.pow(1 - introProgress, 2);
+            camaraJogo.position.lerpVectors(introStart, introEnd, ease);
+            // olha para o desk/computador durante toda a animacao
+            // olha para o computador (sul, -Z) durante a animacao
+            camaraJogo.lookAt(playerPos.x, playerPos.y + EYE_HEIGHT, playerPos.z - 6);
+            if (introProgress >= 1) introCamera = false;
         }
 
         atualizarMovimento(delta);
@@ -172,6 +235,7 @@ function tentarMover(dir, step) {
 }
 
 function atualizarMovimento(delta) {
+    if (introCamera) return;
     let da = targetAngle - playerAngle;
     while (da >  Math.PI) da -= Math.PI * 2;
     while (da < -Math.PI) da += Math.PI * 2;
@@ -191,14 +255,31 @@ function atualizarMovimento(delta) {
 }
 
 function atualizarCamera() {
-    // primeira pessoa — camera nos olhos do jogador
-    const pitchDown = acordando ? (1 - acordarProgresso) * 0.35 : 0; // inclina pra baixo ao acordar
+    if (introCamera) return;
     camaraJogo.position.set(playerPos.x, playerPos.y + EYE_HEIGHT, playerPos.z);
+    // lookAt a 6 unidades à frente para nao inclinar a camara para baixo
     camaraJogo.lookAt(
-        playerPos.x + Math.sin(playerAngle),
-        playerPos.y + EYE_HEIGHT - pitchDown,
-        playerPos.z + Math.cos(playerAngle)
+        playerPos.x + Math.sin(playerAngle) * 6 + mouseOffX,
+        playerPos.y + EYE_HEIGHT + mouseOffY,
+        playerPos.z + Math.cos(playerAngle) * 6
     );
+    // luzAlvo sempre em frente na camara — a rotacao da camara ja inclui o mouse
+    if (luzAlvo) luzAlvo.position.set(0, 0, -1);
+}
+
+function atualizarLuzesFlicker(tempo) {
+    luzesFlicker.forEach(item => {
+        if (item.estragada) {
+            // luz estragada: pisca irregularmente
+            const n = Math.sin(tempo * 11.3 + item.fase) * Math.sin(tempo * 17.7 + item.fase * 1.3);
+            item.luz.intensity = n > 0.2 ? 1.6 + n * 0.4 : (n > -0.1 ? 0.2 : 0);
+        } else {
+            // luz estavel com raros glitches
+            const base = 1.1 + Math.sin(tempo * 1.2 + item.fase) * 0.08;
+            const glitch = Math.random() > 0.996 ? -0.8 : 0;
+            item.luz.intensity = Math.max(0, base + glitch);
+        }
+    });
 }
 
 function criarTokens() {
@@ -360,8 +441,9 @@ function criarLoadingScreen() {
     const msgEl = document.createElement('div');
     Object.assign(msgEl.style, {
         fontFamily: "'Courier New',monospace",
-        fontSize: 'clamp(0.85em,1.5vw,1.1em)',
-        color: '#7a2020', letterSpacing: '5px',
+        fontSize: 'clamp(0.9em,1.5vw,1.1em)',
+        color: '#bb5555', letterSpacing: '5px',
+        textShadow: '0 0 6px rgba(180,40,40,0.5)',
         animation: 'ldMsg 3.2s ease infinite', minHeight: '1.4em'
     });
     msgEl.textContent = msgs[0];
@@ -375,14 +457,15 @@ function criarLoadingScreen() {
     }, 3200);
 
     inner.innerHTML = `
-        <div style="font-family:'Courier New',monospace;font-size:clamp(0.85em,1.4vw,1.1em);
-             color:#6a1818;letter-spacing:7px;margin-bottom:4px">FREDDY FAZBEAR'S PIZZA</div>
-        <div style="font-family:'Courier New',monospace;font-size:clamp(1.6em,3.2vw,2.6em);
-             color:#cc2222;letter-spacing:12px;
+        <div style="font-family:'Courier New',monospace;font-size:clamp(0.9em,1.5vw,1.15em);
+             color:#cc6060;letter-spacing:7px;margin-bottom:4px;
+             text-shadow:0 0 8px rgba(180,40,40,0.6)">FREDDY FAZBEAR'S PIZZA</div>
+        <div style="font-family:'Courier New',monospace;font-size:clamp(1.8em,3.5vw,2.8em);
+             color:#ff4444;letter-spacing:12px;
              animation:ldFlicker 2.5s infinite,ldPulse 3s ease infinite">LOADING</div>
-        <div style="width:280px;height:7px;background:#1a0505;border:1px solid #4a0808;overflow:hidden">
-            <div id="ldBar" style="height:100%;width:0%;background:#8b0000;
-                 box-shadow:0 0 10px #cc0000;transition:width 0.3s ease"></div>
+        <div style="width:280px;height:7px;background:#2a0505;border:1px solid #660a0a;overflow:hidden">
+            <div id="ldBar" style="height:100%;width:0%;background:#cc1010;
+                 box-shadow:0 0 12px #ff2222;transition:width 0.3s ease"></div>
         </div>`;
     inner.appendChild(msgEl);
     div.appendChild(inner);

@@ -152,6 +152,7 @@ function Start() {
     });
 
     fadeOverlay = document.createElement('div');
+    fadeOverlay.id = 'fnaf-overlay';
     Object.assign(fadeOverlay.style, {
         position: 'fixed', top: '0', left: '0',
         width: '100%', height: '100%',
@@ -166,9 +167,8 @@ function Start() {
     initInspRenderer();
 
     const dif        = criarTelaDificuldade((_nivel) => {
+        // direto para o loading — sem animacao intermédia
         loopAtivo = false;
-        // NAO por o fadeOverlay a preto — a loading screen do jogo tem background proprio
-        // o overlay ficaria por cima do canvas e bloquearia tudo
         fadeOverlay.style.transition = 'none';
         fadeOverlay.style.opacity    = '0';
         iniciarJogo(renderer);
@@ -343,24 +343,27 @@ function loop() {
         rendererInsp.render(cenaInsp, camaraInsp);
     }
 
-    // animacao de saida do duto → fade preto → jogo
+    // animacao reversa: saida do duto com luzes a piscar
     if (estadoAtual === 'sair_duto') {
-        progressoSaida += delta / 2.2;
+        progressoSaida += delta / 2.4;
         progressoSaida = Math.min(progressoSaida, 1);
 
-        const t = 1 - Math.pow(1 - progressoSaida, 2); // ease-out
+        const t = 1 - Math.pow(1 - progressoSaida, 2);
         camara.position.lerpVectors(CAM_DUTO_ALVO, CAM_SAIDA_ALVO, t);
         camara.lookAt(0, 4, 0);
 
-        if (progressoSaida > 0.55) {
-            const f = (progressoSaida - 0.55) / 0.45;
-            fadeOverlay.style.opacity = f.toFixed(3);
+        // luzes do duto a piscar durante toda a animacao
+        const flick = Math.sin(progressoSaida * 45) * Math.sin(progressoSaida * 23 + 1.1);
+        if (lanterna) lanterna.intensity = flick > 0 ? 180 + flick * 80 : 20;
+
+        // fade a preto na ultima parte
+        if (progressoSaida > 0.65) {
+            fadeOverlay.style.opacity = ((progressoSaida - 0.65) / 0.35).toFixed(3);
         }
 
         if (progressoSaida >= 1) {
             loopAtivo = false;
-            fadeOverlay.style.transition = 'opacity 0.9s ease';
-            fadeOverlay.style.opacity    = '0';
+            // overlay fica a preto — jogo.js vai retira-lo depois de carregar
             iniciarJogo(renderer);
         }
 

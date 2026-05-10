@@ -136,20 +136,52 @@ function criarCupcakeObj(cena) {
 
     const texLoader = new THREE.TextureLoader();
 
-    const texCorpo = texLoader.load('../Textures/corpocupcake.png');
+    // textura do embrulho: pregas cilíndricas com highlight forte no centro
+    // cor base laranja-castanho quente, vincos escuros, highlight creme no pico
+    const cvW = document.createElement('canvas');
+    cvW.width = 512; cvW.height = 512;
+    const ctxW = cvW.getContext('2d');
+    // base: terracotta/vermelho-tijolo (cor fiel à referência)
+    ctxW.fillStyle = '#8B2E08'; ctxW.fillRect(0, 0, 512, 512);
+    const nR = 14, rW = 512 / nR;
+    for (let i = 0; i < nR; i++) {
+        const g = ctxW.createLinearGradient(i * rW, 0, (i + 1) * rW, 0);
+        g.addColorStop(0.00, 'rgba(0,0,0,0.82)');
+        g.addColorStop(0.12, 'rgba(15,3,0,0.60)');
+        g.addColorStop(0.32, 'rgba(180,70,20,0.45)');
+        g.addColorStop(0.50, 'rgba(245,145,80,0.88)');   // highlight quente no centro
+        g.addColorStop(0.68, 'rgba(170,62,15,0.45)');
+        g.addColorStop(0.88, 'rgba(15,3,0,0.60)');
+        g.addColorStop(1.00, 'rgba(0,0,0,0.82)');
+        ctxW.fillStyle = g; ctxW.fillRect(i * rW, 0, rW, 512);
+    }
+    // vinheta vertical: escurece topo e fundo do embrulho
+    const gv = ctxW.createLinearGradient(0, 0, 0, 512);
+    gv.addColorStop(0,    'rgba(0,0,0,0.45)');
+    gv.addColorStop(0.18, 'rgba(0,0,0,0.05)');
+    gv.addColorStop(0.82, 'rgba(0,0,0,0.05)');
+    gv.addColorStop(1,    'rgba(0,0,0,0.55)');
+    ctxW.fillStyle = gv; ctxW.fillRect(0, 0, 512, 512);
+    const texCorpo = new THREE.CanvasTexture(cvW);
     texCorpo.wrapS = THREE.RepeatWrapping;
 
     const texVela = texLoader.load('../Textures/topovela.png');
     texVela.wrapS = THREE.RepeatWrapping;
     texVela.wrapT = THREE.RepeatWrapping;
 
-    const matWrapper  = new THREE.MeshStandardMaterial({ map: texCorpo, roughness: 0.85 });
-    const matFrost    = new THREE.MeshStandardMaterial({ color: 0xd0185a, roughness: 0.55, metalness: 0.02 });
-    const matSclera     = new THREE.MeshStandardMaterial({ color: 0xd8f0ee, roughness: 0.35 });
-    const matLimbal     = new THREE.MeshStandardMaterial({ color: 0x1a0a00, roughness: 0.6 });
-    const matIrisOuter  = new THREE.MeshStandardMaterial({ color: 0x7a4c06, roughness: 0.3 });
-    const matIrisInner  = new THREE.MeshStandardMaterial({ color: 0xd4a010, roughness: 0.2, emissive: 0x3a2000, emissiveIntensity: 0.5 });
-    const matPupil      = new THREE.MeshStandardMaterial({ color: 0x060606, roughness: 0.4 });
+    // corpocupcake.png = embrulho (wrapper) — volta ao sítio certo
+    const matWrapper = new THREE.MeshStandardMaterial({ map: texCorpo, roughness: 0.85 });
+
+    const matFrost = new THREE.MeshStandardMaterial({
+        color: 0xd0185a, roughness: 0.55, metalness: 0.02,
+    });
+    const matFrostDome = matFrost;
+
+    const matSclera     = new THREE.MeshStandardMaterial({ color: 0xf4f0e4, roughness: 0.25 });
+    const matLimbal     = new THREE.MeshStandardMaterial({ color: 0x080400, roughness: 0.7 });
+    const matIrisOuter  = new THREE.MeshStandardMaterial({ color: 0x7a4a08, roughness: 0.3 });
+    const matIrisInner  = new THREE.MeshStandardMaterial({ color: 0xb06010, roughness: 0.18, emissive: 0x2a1000, emissiveIntensity: 0.4 });
+    const matPupil      = new THREE.MeshStandardMaterial({ color: 0x020202, roughness: 0.5 });
     const matHL         = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 1.5 });
     const matVela     = new THREE.MeshStandardMaterial({ map: texVela, roughness: 0.75 });
     const matWick     = new THREE.MeshStandardMaterial({ color: 0x1a1208, roughness: 1.0 });
@@ -162,51 +194,63 @@ function criarCupcakeObj(cena) {
     wrapper.position.y = 0.45;
     grupo.add(wrapper);
 
-    // aro de transição
-    const frostRing = new THREE.Mesh(new THREE.CylinderGeometry(1.16, 1.06, 0.12, 32), matFrost);
-    frostRing.position.y = 0.93;
-    grupo.add(frostRing);
-
-    // cúpula rosa
+    // cúpula rosa — thetaLength reduzido para o dome terminar onde o tubo começa
+    // dome bottom: y = 0.90 + 1.1*cos(0.53π) ≈ 0.80, onde o tubo cobre completamente
     const frostDome = new THREE.Mesh(
-        new THREE.SphereGeometry(1.1, 32, 24, 0, Math.PI * 2, 0, Math.PI * 0.55),
-        matFrost
+        new THREE.SphereGeometry(1.1, 32, 24, 0, Math.PI * 2, 0, Math.PI * 0.53),
+        matFrostDome
     );
     frostDome.position.y = 0.90;
     grupo.add(frostDome);
 
+    // ondas do creme — tubo mais dentro do dome (r=1.01), projeção suave de ~0.04
+    const glaceCurve = new (class extends THREE.Curve {
+        getPoint(t, out = new THREE.Vector3()) {
+            const a = t * Math.PI * 2;
+            return out.set(
+                Math.cos(a) * 1.01,
+                0.82 + 0.08 * Math.sin(5 * a),
+                Math.sin(a) * 1.01
+            );
+        }
+    })();
+    grupo.add(new THREE.Mesh(
+        new THREE.TubeGeometry(glaceCurve, 128, 0.13, 10, true),
+        matFrost
+    ));
+
     function criarOlho(xOff) {
         const g = new THREE.Group();
 
-        // esclerotica
-        g.add(new THREE.Mesh(new THREE.SphereGeometry(0.40, 32, 32), matSclera));
+        // esclerotica — 64 segmentos para círculo perfeito
+        g.add(new THREE.Mesh(new THREE.SphereGeometry(0.40, 64, 64), matSclera));
 
         // limbal
-        const limbal = new THREE.Mesh(new THREE.SphereGeometry(0.296, 28, 28), matLimbal);
+        const limbal = new THREE.Mesh(new THREE.SphereGeometry(0.296, 64, 64), matLimbal);
         limbal.position.z = 0.14;
         g.add(limbal);
 
         // iris exterior
-        const irisOut = new THREE.Mesh(new THREE.SphereGeometry(0.268, 28, 28), matIrisOuter);
+        const irisOut = new THREE.Mesh(new THREE.SphereGeometry(0.268, 64, 64), matIrisOuter);
         irisOut.position.z = 0.17;
         g.add(irisOut);
 
         // iris interior
-        const irisIn = new THREE.Mesh(new THREE.SphereGeometry(0.220, 28, 28), matIrisInner);
+        const irisIn = new THREE.Mesh(new THREE.SphereGeometry(0.220, 64, 64), matIrisInner);
         irisIn.position.z = 0.22;
         g.add(irisIn);
 
         // pupila
-        const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.125, 22, 22), matPupil);
+        const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.125, 48, 48), matPupil);
         pupil.position.z = 0.33;
         g.add(pupil);
 
         // brilho
-        const hl = new THREE.Mesh(new THREE.SphereGeometry(0.042, 12, 12), matHL);
+        const hl = new THREE.Mesh(new THREE.SphereGeometry(0.042, 24, 24), matHL);
         hl.position.set(-0.07, 0.09, 0.38);
         g.add(hl);
 
-        const hl2 = new THREE.Mesh(new THREE.SphereGeometry(0.018, 10, 10), matHL);
+        const hl2 = new THREE.Mesh(new THREE.SphereGeometry(0.018, 16, 16), matHL);
         hl2.position.set(0.05, -0.05, 0.39);
         g.add(hl2);
 
