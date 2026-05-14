@@ -6,7 +6,7 @@ const clock  = new THREE.Clock();
 const keys   = {};
 
 const MOVE_SPEED = 4.5;
-const EYE_HEIGHT = 2.7;
+const EYE_HEIGHT = 3.9;
 
 let cenaJogo, camaraJogo;
 let luzAmbiente = null;
@@ -16,9 +16,10 @@ let playerPos   = new THREE.Vector3(0, 0, 0);
 let playerAngle = 0;
 let targetAngle = 0;
 
-// colisao
+// colisao — zonas caminhaveis carregadas do chaopaandar.glb
 let mapaBBs = [];
 const _pBox = new THREE.Box3();
+let zonasCaminhaveis = [];
 
 // efeito acordar
 let acordarProgresso = 0;
@@ -92,7 +93,7 @@ export function iniciarJogo(renderer) {
     // loading screen
     const loadDiv = criarLoadingScreen();
 
-    loader.load('./Models/fnaf_1_hw_map.glb',
+    loader.load('./Models/mapa1.glb',
     gltf => {
         gltf.scene.traverse(o => {
             if (!o.isMesh) return;
@@ -161,7 +162,17 @@ export function iniciarJogo(renderer) {
     err => console.error(err)
     );
 
-    criarTokens();
+    // carregar zonas caminhaveis — tokens criados após as zonas estarem prontas
+    loader.load('./Models/chaopaandar.glb', gltf => {
+        gltf.scene.traverse(o => {
+            if (!o.isMesh) return;
+            o.visible = false;
+            const bb = new THREE.Box3().setFromObject(o);
+            bb.expandByScalar(0.08); // cobre micro-gaps entre planes adjacentes
+            zonasCaminhaveis.push(bb);
+        });
+        criarTokens();
+    });
     criarMinimapa();
     criarHUD();
 
@@ -177,7 +188,7 @@ export function iniciarJogo(renderer) {
         elapsedTime += delta;
 
         if (acordando) {
-            acordarProgresso = Math.min(1, acordarProgresso + delta * 0.28);
+            acordarProgresso = Math.min(1, acordarProgresso + delta * 0.65);
             const t = acordarProgresso;
             luzAmbiente.intensity = 0.03;
             if (t < 0.82) {
@@ -223,11 +234,18 @@ let mapaMin = new THREE.Vector3(-999,-999,-999);
 let mapaMax = new THREE.Vector3( 999, 999, 999);
 
 function colide(pos) {
-    // por agora: so impede sair dos limites do mapa
-    const margem = 0.5;
-    if (pos.x < mapaMin.x + margem || pos.x > mapaMax.x - margem) return true;
-    if (pos.z < mapaMin.z + margem || pos.z > mapaMax.z - margem) return true;
-    return false;
+    if (zonasCaminhaveis.length === 0) {
+        // fallback enquanto o GLB ainda nao carregou
+        const m = 0.5;
+        return pos.x < mapaMin.x + m || pos.x > mapaMax.x - m ||
+               pos.z < mapaMin.z + m || pos.z > mapaMax.z - m;
+    }
+    // verifica so X e Z — colide se nao estiver dentro de nenhuma zona
+    const M = 0.15; // margem do corpo do jogador
+    return !zonasCaminhaveis.some(bb =>
+        pos.x >= bb.min.x + M && pos.x <= bb.max.x - M &&
+        pos.z >= bb.min.z + M && pos.z <= bb.max.z - M
+    );
 }
 
 function tentarMover(dir, step) {
@@ -251,7 +269,8 @@ function atualizarMovimento(delta) {
     if (keys['KeyW'] || keys['ArrowUp']) tentarMover(dir, MOVE_SPEED * delta);
 
     tokens = tokens.filter(t => {
-        if (playerPos.distanceTo(t.userData.worldPos) < 0.7) {
+        const wp = t.userData.worldPos;
+        if (Math.hypot(playerPos.x - wp.x, playerPos.z - wp.z) < 1.4) {
             cenaJogo.remove(t);
             tokensApanhados++;
             return false;
@@ -301,27 +320,35 @@ function atualizarLuzesFlicker(tempo) {
 }
 
 function criarTokens() {
-    // posicoes baseadas na exploracao real do mapa
-    // corredor principal: X~0..5, Z~-7..-14
-    // corredor sul (escritorio): X~-2..2, Z~-15..-22
+    // gera tokens automaticamente a partir das zonas caminhaveis
+    // grelha centrada em cada zona, espaçamento minimo entre tokens
     const Y = 0.4;
-    const posicoes = [
-        // corredor central
-        [ 1,Y, -8], [ 3,Y, -8], [ 1,Y,-10], [ 3,Y,-10],
-        [ 1,Y,-12], [ 3,Y,-12], [ 1,Y,-14], [ 3,Y,-14],
-        // corredor esq
-        [-2,Y, -8], [-2,Y,-10], [-2,Y,-12],
-        // corredor sul (escritorio)
-        [ 0,Y,-16], [ 2,Y,-16], [-2,Y,-16],
-        [ 0,Y,-18], [ 2,Y,-18], [-2,Y,-18],
-        [ 0,Y,-20], [ 1,Y,-20],
-        // sala principal (norte)
-        [ 0,Y, -5], [ 3,Y, -5], [-2,Y, -5],
-        [ 0,Y, -3], [ 4,Y, -6], [-3,Y, -6],
-        [ 5,Y,-10], [ 5,Y,-12],
-        [-4,Y,-10], [-4,Y,-12],
-        [ 0,Y,-22],
-    ];
+    const SPACING  = 5.5;  // menos tokens por zona
+    const MIN_DIST = 5.0;  // distancia minima entre tokens
+    const posicoes = [];
+
+    zonasCaminhaveis.forEach(bb => {
+        const w  = bb.max.x - bb.min.x;
+        const d  = bb.max.z - bb.min.z;
+        const cx = (bb.min.x + bb.max.x) / 2;
+        const cz = (bb.min.z + bb.max.z) / 2;
+        if (w < 1.0 || d < 1.0) return;
+
+        const cols = Math.max(1, Math.round(w / SPACING));
+        const rows = Math.max(1, Math.round(d / SPACING));
+
+        for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
+                const x = cols === 1 ? cx : cx + (c - (cols-1)/2) * SPACING;
+                const z = rows === 1 ? cz : cz + (r - (rows-1)/2) * SPACING;
+                if (x < bb.min.x + 0.4 || x > bb.max.x - 0.4) continue;
+                if (z < bb.min.z + 0.4 || z > bb.max.z - 0.4) continue;
+                const perto = posicoes.some(p => Math.hypot(x-p[0], z-p[2]) < MIN_DIST);
+                if (!perto) posicoes.push([x, Y, z]);
+            }
+        }
+    });
+
     totalTokens = posicoes.length;
     posicoes.forEach(([x, y, z]) => {
         const t = criarPizzaToken();
@@ -333,7 +360,14 @@ function criarTokens() {
 }
 
 function criarPizzaToken() {
+    // wrapper: roda em torno do eixo Y (efeito moeda a girar)
+    const wrapper = new THREE.Group();
+
+    // inner: a pizza em si, de pé e ligeiramente na diagonal
     const g = new THREE.Group();
+    g.rotation.x = Math.PI / 2; // de pé
+    g.rotation.y = 0.45;        // diagonal
+
     const matBase   = new THREE.MeshStandardMaterial({ color: 0xd4882a, roughness: 0.85 });
     const matCrosta = new THREE.MeshStandardMaterial({ color: 0xb8621a, roughness: 0.9  });
     const matMolho  = new THREE.MeshStandardMaterial({ color: 0xc41a0f, roughness: 0.7  });
@@ -353,13 +387,17 @@ function criarPizzaToken() {
         const pep = new THREE.Mesh(pepGeo, matPepper);
         pep.position.set(px, 0.09, pz); g.add(pep);
     });
-    return g;
+
+    wrapper.add(g);
+    return wrapper;
 }
 
 function atualizarTokens() {
     tokens.forEach((t, i) => {
-        t.position.y = t.userData.worldPos.y + Math.sin(elapsedTime * 2.2 + i * 0.9) * 0.10;
-        t.rotation.y += 0.015;
+        // wrapper gira em Y — pizza de pé a girar como moeda
+        t.rotation.y += 0.028;
+        // leve flutuacao vertical
+        t.position.y = t.userData.worldPos.y + Math.sin(elapsedTime * 2.0 + i * 1.1) * 0.08;
     });
 }
 
@@ -507,23 +545,48 @@ function criarMinimapa() {
 
 function atualizarMinimapa() {
     if (!ctxMapa) return;
-    const W = 180, H = 180, S = 4.0;
+    const W = 180, H = 180, S = 4.5;
     ctxMapa.clearRect(0, 0, W, H);
-    const cx = W/2 - playerPos.x * S, cy = H/2 + playerPos.z * S;
-    tokens.forEach(t => {
-        const wp = t.userData.worldPos;
-        const tx = cx + wp.x*S, ty = cy - wp.z*S;
-        if (tx<0||tx>W||ty<0||ty>H) return;
-        ctxMapa.fillStyle = '#dd00dd';
-        ctxMapa.beginPath(); ctxMapa.arc(tx,ty,3,0,Math.PI*2); ctxMapa.fill();
-    });
+
+    // mapa roda com o jogador — seta sempre aponta para cima (frente)
     ctxMapa.save();
     ctxMapa.translate(W/2, H/2);
-    ctxMapa.rotate(-playerAngle + Math.PI);
-    ctxMapa.fillStyle = '#ffff00';
-    ctxMapa.beginPath(); ctxMapa.moveTo(0,-9); ctxMapa.lineTo(6,7); ctxMapa.lineTo(-6,7);
-    ctxMapa.closePath(); ctxMapa.fill();
+    ctxMapa.rotate(playerAngle - Math.PI); // mapa roda oposto ao player
+
+    // zonas caminhaveis centradas no jogador
+    // ry usa min.z (borda mais a sul/frente) sem negaçao — zona à frente fica acima
+    zonasCaminhaveis.forEach(bb => {
+        const rx = (bb.min.x - playerPos.x) * S;
+        const ry = (bb.min.z - playerPos.z) * S;
+        const rw = (bb.max.x - bb.min.x) * S;
+        const rh = (bb.max.z - bb.min.z) * S;
+        ctxMapa.fillStyle = 'rgba(50,50,80,0.92)';
+        ctxMapa.fillRect(rx, ry, rw, rh);
+        ctxMapa.strokeStyle = 'rgba(120,80,160,0.55)';
+        ctxMapa.lineWidth = 0.8;
+        ctxMapa.strokeRect(rx, ry, rw, rh);
+    });
+
+    // tokens por coletar
+    tokens.forEach(t => {
+        const wp = t.userData.worldPos;
+        const tx = (wp.x - playerPos.x) * S;
+        const ty = (wp.z - playerPos.z) * S;
+        ctxMapa.fillStyle = '#dd00dd';
+        ctxMapa.beginPath(); ctxMapa.arc(tx, ty, 3, 0, Math.PI*2); ctxMapa.fill();
+    });
+
     ctxMapa.restore();
+
+    // seta do jogador — sempre no centro a apontar para cima
+    ctxMapa.fillStyle = '#ffff00';
+    ctxMapa.beginPath();
+    ctxMapa.moveTo(W/2, H/2-9);
+    ctxMapa.lineTo(W/2+6, H/2+7);
+    ctxMapa.lineTo(W/2-6, H/2+7);
+    ctxMapa.closePath(); ctxMapa.fill();
+
+    // contador
     ctxMapa.fillStyle = '#ff88ff';
     ctxMapa.font = 'bold 11px monospace';
     ctxMapa.fillText(`${tokensApanhados} / ${totalTokens}`, 6, H-6);
