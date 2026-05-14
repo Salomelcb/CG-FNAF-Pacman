@@ -242,8 +242,8 @@ function abrirInspecao() {
     cupcakePosOriginal.copy(objetosCena.cupcake.grupo.position);
 
     cena.remove(objetosCena.cupcake.grupo);
-    objetosCena.cupcake.grupo.position.set(0, -1.2, 0);
-    objetosCena.cupcake.grupo.scale.setScalar(0.01);
+    objetosCena.cupcake.grupo.position.set(0, -0.4, 0);
+    objetosCena.cupcake.grupo.scale.setScalar(0.08);
     objetosCena.cupcake.grupo.rotation.set(0, 0, 0);
     cenaInsp.add(objetosCena.cupcake.grupo);
     emAberturaInsp = true;

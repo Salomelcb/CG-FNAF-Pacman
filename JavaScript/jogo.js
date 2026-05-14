@@ -6,10 +6,11 @@ const clock  = new THREE.Clock();
 const keys   = {};
 
 const MOVE_SPEED = 4.5;
-const EYE_HEIGHT = 2.3;
+const EYE_HEIGHT = 2.7;
 
 let cenaJogo, camaraJogo;
 let luzAmbiente = null;
+let lanterna     = null;
 
 let playerPos   = new THREE.Vector3(0, 0, 0);
 let playerAngle = 0;
@@ -38,15 +39,18 @@ const introStart  = new THREE.Vector3();
 const introEnd    = new THREE.Vector3();
 
 // mouse para a lanterna
-let mouseOffX = 0;
-let mouseOffY = 0;
+let mouseOffX = 0, mouseOffY = 0; // offset suave do pescoco
+let smoothX   = 0, smoothY   = 0;
+let rawMX     = 0, rawMY     = 0; // coordenadas -1..1 para unproject
 let luzAlvo   = null;
 
 export function iniciarJogo(renderer) {
     window.addEventListener('mousemove', e => {
         // -1 a 1 normalizado, Y invertido (topo do ecra = olhar para cima)
-        mouseOffX =  (e.clientX / window.innerWidth  - 0.5) * 0.55;
-        mouseOffY = -(e.clientY / window.innerHeight - 0.5) * 0.40;
+        rawMX     =  (e.clientX / window.innerWidth)  * 2 - 1;
+        rawMY     = -(e.clientY / window.innerHeight) * 2 + 1;
+        mouseOffX = rawMX * 0.34;
+        mouseOffY = rawMY * 0.26;
     });
 
     document.addEventListener('keydown', e => {
@@ -74,15 +78,14 @@ export function iniciarJogo(renderer) {
     cenaJogo.add(luzAmbiente);
 
     // lanterna presa à camara — segue o mouse
-    const lanterna = new THREE.SpotLight(0xfff5dd, 60);
-    lanterna.angle    = 0.36;
-    lanterna.penumbra = 0.50;
+    lanterna = new THREE.SpotLight(0xfff5dd, 60);
+    lanterna.angle    = 0.44;
+    lanterna.penumbra = 0.75;
     lanterna.decay    = 1.8;
     lanterna.distance = 24;
     luzAlvo = new THREE.Object3D();
-    luzAlvo.position.set(0, 0.0, -1); // aponta a frente, centrado
     camaraJogo.add(lanterna);
-    camaraJogo.add(luzAlvo);
+    cenaJogo.add(luzAlvo);
     lanterna.target = luzAlvo;
     cenaJogo.add(camaraJogo);
 
@@ -95,8 +98,8 @@ export function iniciarJogo(renderer) {
             if (!o.isMesh) return;
             const mats = Array.isArray(o.material) ? o.material : [o.material];
             mats.forEach(m => {
-                m.emissive          = new THREE.Color(0x151010);
-                m.emissiveIntensity = 1.0;
+                m.emissive          = new THREE.Color(0x060404);
+                m.emissiveIntensity = 0.30;
                 m.needsUpdate       = true;
             });
             const bb   = new THREE.Box3().setFromObject(o);
@@ -140,7 +143,7 @@ export function iniciarJogo(renderer) {
             const ov = document.getElementById('fnaf-overlay');
             if (ov) { ov.style.transition = 'none'; ov.style.opacity = '0'; }
             // sai do duto a avancar: comeca atras (norte/cacifos, Z+), olha para sul (desk), avanca
-            introStart.set(playerPos.x, playerPos.y + 0.3, playerPos.z + 2.5);
+            introStart.set(playerPos.x, playerPos.y + EYE_HEIGHT * 0.6, playerPos.z + 0.8);
             introEnd.set(  playerPos.x, playerPos.y + EYE_HEIGHT, playerPos.z);
             introCamera   = true;
             introProgress = 0;
@@ -174,17 +177,20 @@ export function iniciarJogo(renderer) {
         elapsedTime += delta;
 
         if (acordando) {
-            acordarProgresso = Math.min(1, acordarProgresso + delta * 0.42);
+            acordarProgresso = Math.min(1, acordarProgresso + delta * 0.28);
             const t = acordarProgresso;
-            if (t < 0.72) {
-                // mesmo padrao do duto: produto de dois senos com frequencias diferentes
-                const flick = Math.sin(t * 45) * Math.sin(t * 23 + 1.1);
-                luzAmbiente.intensity = flick > 0 ? 1.4 + flick * 0.5 : 0.03;
+            luzAmbiente.intensity = 0.03;
+            if (t < 0.82) {
+                // produto de senos — quando negativo a lanterna apaga (flash escuro)
+                const flick = Math.sin(t * 20) * Math.sin(t * 11.3 + 1.1);
+                lanterna.intensity = flick > 0 ? 55 + flick * 5 : 0;
             } else {
-                luzAmbiente.intensity = 0.04 + ((t - 0.72) / 0.28) * 0.08;
+                const fade = (t - 0.82) / 0.18;
+                lanterna.intensity = fade * 60;
             }
             if (acordarProgresso >= 1) {
-                luzAmbiente.intensity = 0.06;
+                lanterna.intensity    = 60;
+                luzAmbiente.intensity = 0.03;
                 acordando = false;
             }
         }
@@ -239,7 +245,7 @@ function atualizarMovimento(delta) {
     let da = targetAngle - playerAngle;
     while (da >  Math.PI) da -= Math.PI * 2;
     while (da < -Math.PI) da += Math.PI * 2;
-    playerAngle += da * Math.min(1, delta * 14);
+    playerAngle += da * Math.min(1, delta * 6);
 
     const dir = new THREE.Vector3(Math.sin(playerAngle), 0, Math.cos(playerAngle));
     if (keys['KeyW'] || keys['ArrowUp']) tentarMover(dir, MOVE_SPEED * delta);
@@ -257,14 +263,26 @@ function atualizarMovimento(delta) {
 function atualizarCamera() {
     if (introCamera) return;
     camaraJogo.position.set(playerPos.x, playerPos.y + EYE_HEIGHT, playerPos.z);
-    // lookAt a 6 unidades à frente para nao inclinar a camara para baixo
+
+    smoothX += (mouseOffX - smoothX) * 0.10;
+    smoothY += (mouseOffY - smoothY) * 0.10;
+
+    const fwdX = Math.sin(playerAngle), fwdZ = Math.cos(playerAngle);
+    const rgtX = -Math.cos(playerAngle), rgtZ = Math.sin(playerAngle);
+
+    // camara: pescoco suave com pequeno offset
+    const dx = fwdX + rgtX * smoothX, dy = smoothY, dz = fwdZ + rgtZ * smoothX;
+    const len = Math.sqrt(dx*dx + dy*dy + dz*dz);
     camaraJogo.lookAt(
-        playerPos.x + Math.sin(playerAngle) * 6 + mouseOffX,
-        playerPos.y + EYE_HEIGHT + mouseOffY,
-        playerPos.z + Math.cos(playerAngle) * 6
+        camaraJogo.position.x + (dx/len) * 10,
+        camaraJogo.position.y + (dy/len) * 10,
+        camaraJogo.position.z + (dz/len) * 10
     );
-    // luzAlvo sempre em frente na camara — a rotacao da camara ja inclui o mouse
-    if (luzAlvo) luzAlvo.position.set(0, 0, -1);
+
+    // lanterna: unproject exacto do mouse — igual ao menu
+    const vec = new THREE.Vector3(rawMX, rawMY, 0.5).unproject(camaraJogo);
+    const dir = vec.sub(camaraJogo.position).normalize();
+    if (luzAlvo) luzAlvo.position.copy(camaraJogo.position).addScaledVector(dir, 20);
 }
 
 function atualizarLuzesFlicker(tempo) {

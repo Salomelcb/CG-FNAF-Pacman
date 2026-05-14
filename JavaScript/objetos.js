@@ -179,8 +179,8 @@ function criarCupcakeObj(cena) {
 
     const matSclera     = new THREE.MeshStandardMaterial({ color: 0xf4f0e4, roughness: 0.25 });
     const matLimbal     = new THREE.MeshStandardMaterial({ color: 0x080400, roughness: 0.7 });
-    const matIrisOuter  = new THREE.MeshStandardMaterial({ color: 0x7a4a08, roughness: 0.3 });
-    const matIrisInner  = new THREE.MeshStandardMaterial({ color: 0xb06010, roughness: 0.18, emissive: 0x2a1000, emissiveIntensity: 0.4 });
+    const matIrisOuter  = new THREE.MeshStandardMaterial({ color: 0x9a6a08, roughness: 0.30 });
+    const matIrisInner  = new THREE.MeshStandardMaterial({ color: 0xe0aa10, roughness: 0.18, emissive: 0x4a3000, emissiveIntensity: 0.40 });
     const matPupil      = new THREE.MeshStandardMaterial({ color: 0x020202, roughness: 0.5 });
     const matHL         = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 1.5 });
     const matVela     = new THREE.MeshStandardMaterial({ map: texVela, roughness: 0.75 });
@@ -222,7 +222,7 @@ function criarCupcakeObj(cena) {
     function criarOlho(xOff) {
         const g = new THREE.Group();
 
-        // esclerotica — 64 segmentos para círculo perfeito
+        // esclerotica
         g.add(new THREE.Mesh(new THREE.SphereGeometry(0.40, 64, 64), matSclera));
 
         // limbal
@@ -241,7 +241,7 @@ function criarCupcakeObj(cena) {
         g.add(irisIn);
 
         // pupila
-        const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.125, 48, 48), matPupil);
+        const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.125, 64, 64), matPupil);
         pupil.position.z = 0.33;
         g.add(pupil);
 
