@@ -347,6 +347,126 @@ function criarPizzaObj(cena) {
     return { grupo };
 }
 
+// cabeça do Golden Freddy
+function criarGoldenHeadObj(cena) {
+    const grupo = new THREE.Group();
+
+    const matGold  = new THREE.MeshStandardMaterial({ color: 0xc2803a, roughness: 0.80, metalness: 0.05 });
+    const matRusty = new THREE.MeshStandardMaterial({ color: 0x8a5220, roughness: 0.92, metalness: 0.02 });
+    const matDark  = new THREE.MeshStandardMaterial({ color: 0x0d0d0d, roughness: 0.80, metalness: 0.10 });
+    const matVoid  = new THREE.MeshStandardMaterial({ color: 0x030303, roughness: 1.00 });
+    const matHat   = new THREE.MeshStandardMaterial({ color: 0x111118, roughness: 0.75, metalness: 0.20 });
+    const matBand  = new THREE.MeshStandardMaterial({ color: 0x1e1000, roughness: 0.72 });
+    const matFlap  = new THREE.MeshStandardMaterial({ color: 0x7a5a08, roughness: 0.85, metalness: 0.50, side: THREE.DoubleSide });
+
+    function add(geo, mat, pos, scl, rot) {
+        const m = new THREE.Mesh(geo, mat);
+        if (pos) m.position.set(...pos);
+        if (scl) m.scale.set(...scl);
+        if (rot) m.rotation.set(...rot);
+        grupo.add(m);
+        return m;
+    }
+
+    // cabeça
+    add(new THREE.SphereGeometry(2, 48, 48), matGold, [0, 0, 0], [1.08, 1.0, 0.94]);
+
+    // orelhas
+    add(new THREE.SphereGeometry(0.58, 22, 22), matGold,  [-1.72, 1.64, 0    ], [1.0, 0.95, 0.42]);
+    add(new THREE.SphereGeometry(0.36, 16, 16), matRusty, [-1.72, 1.64, 0.18 ], [1.0, 0.90, 0.28]);
+    add(new THREE.SphereGeometry(0.58, 22, 22), matGold,  [ 1.72, 1.64, 0    ], [1.0, 0.95, 0.42]);
+    add(new THREE.SphereGeometry(0.36, 16, 16), matRusty, [ 1.72, 1.64, 0.18 ], [1.0, 0.90, 0.28]);
+
+    // olhos
+    const EYE_X = 0.76, EYE_Y = 0.6;
+    const eyeGlowMeshes = [];
+    const eyeGlowLights = [];
+
+    [[-EYE_X, EYE_Y], [EYE_X, EYE_Y]].forEach(([ex, ey]) => {
+        add(new THREE.SphereGeometry(0.52, 24, 24), matVoid, [ex, ey, 1.45], [1.0, 0.80, 1.0]);
+        const ring = new THREE.Mesh(new THREE.TorusGeometry(0.28, 0.055, 8, 28), matDark);
+        ring.position.set(ex, ey, 1.10);
+        grupo.add(ring);
+        const matGlow = new THREE.MeshStandardMaterial({
+            color: 0xffee00, emissive: new THREE.Color(0xffbb00),
+            emissiveIntensity: 1.0, roughness: 0.10
+        });
+        const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.20, 16, 16), matGlow);
+        pupil.position.set(ex, ey, 1.14);
+        grupo.add(pupil);
+        eyeGlowMeshes.push(pupil);
+        const pl = new THREE.PointLight(0xffee00, 1.0, 4.0);
+        pl.position.set(ex, ey, 2.4);
+        grupo.add(pl);
+        eyeGlowLights.push(pl);
+    });
+
+    // sobrancelhas carrancudas
+    add(new THREE.BoxGeometry(0.58, 0.10, 0.08), matDark, [-EYE_X, EYE_Y + 0.5, 1.92], null, [0, 0,  0.28]);
+    add(new THREE.BoxGeometry(0.58, 0.10, 0.08), matDark, [ EYE_X, EYE_Y + 0.5, 1.92], null, [0, 0, -0.28]);
+
+    // focinho — dois puffs + nariz
+    add(new THREE.SphereGeometry(0.80, 26, 26), matRusty, [-0.50, -0.30, 1.5], [1.0, 0.90, 0.86]);
+    add(new THREE.SphereGeometry(0.80, 26, 26), matRusty, [ 0.50, -0.30, 1.5], [1.0, 0.90, 0.86]);
+    add(new THREE.SphereGeometry(0.20, 12, 12), matDark,  [ 0.00,  0.08, 2.0], [1.4, 0.80, 1.0]);
+
+    // void da boca + maxilar
+    add(new THREE.SphereGeometry(1.0,  26, 26), matVoid,  [ 0.00, -1.20, 0.35], [1.18, 0.60, 0.82]);
+    add(new THREE.SphereGeometry(0.82, 26, 26), matRusty, [-0.22, -1.25, 1.30], [1.05, 0.58, 1.20]);
+    add(new THREE.SphereGeometry(0.82, 26, 26), matRusty, [ 0.22, -1.25, 1.30], [1.05, 0.58, 1.20]);
+
+    // pontos de bochecha
+    const matDot = new THREE.MeshStandardMaterial({ color: 0x0d0d0d, roughness: 0.95 });
+    [[-0.86,-0.18],[-0.58,-0.18],[-0.72,-0.40],
+      [ 0.58,-0.18],[ 0.86,-0.18],[ 0.72,-0.40]].forEach(([dx, dy]) => {
+        add(new THREE.SphereGeometry(0.07, 8, 8), matDot, [dx, dy, 2.2]);
+    });
+
+    // chapéu
+    const hatG = new THREE.Group();
+    hatG.position.set(0, 1.96, 0);
+    grupo.add(hatG);
+    [[new THREE.CylinderGeometry(1.05, 1.05, 0.10, 40), matHat,  0.00],
+     [new THREE.CylinderGeometry(0.72, 0.74, 1.20, 40), matHat,  0.65],
+     [new THREE.CylinderGeometry(0.72, 0.72, 0.08, 40), matHat,  1.26],
+     [new THREE.CylinderGeometry(0.73, 0.73, 0.18, 40), matBand, 0.12]].forEach(([geo, mat, py]) => {
+        const m = new THREE.Mesh(geo, mat); m.position.y = py; hatG.add(m);
+    });
+
+    // fios expostos (lado direito — dano)
+    [
+        { hex: 0xff2020, r: 0.026, pts: [[1.88,0.90,0.12],[2.14,0.54,0.46],[2.06,0.14,0.78],[1.90,-0.22,1.04],[1.74,-0.52,1.26]] },
+        { hex: 0xdddddd, r: 0.020, pts: [[1.84,0.62,0.02],[2.18,0.26,0.34],[2.12,-0.06,0.64],[1.94,-0.36,0.96],[1.80,-0.72,1.30]] },
+        { hex: 0x2266ff, r: 0.022, pts: [[1.90,1.08,-0.02],[2.24,0.68,0.28],[2.18,0.28,0.58],[2.02,-0.14,0.88],[1.80,-0.46,1.10]] },
+        { hex: 0x111111, r: 0.030, pts: [[1.88,0.44,-0.10],[2.24,0.08,0.22],[2.18,-0.20,0.52],[2.00,-0.44,0.82],[1.86,-0.82,1.18]] },
+    ].forEach(({ hex, r, pts }) => {
+        const mat = new THREE.MeshStandardMaterial({ color: hex, roughness: 0.35, metalness: 0.78 });
+        const crv = new THREE.CatmullRomCurve3(pts.map(([x, y, z]) => new THREE.Vector3(x, y, z)));
+        grupo.add(new THREE.Mesh(new THREE.TubeGeometry(crv, 22, r, 7, false), mat));
+    });
+
+    // anel de dano
+    const holeRing = new THREE.Mesh(
+        new THREE.RingGeometry(0.22, 0.44, 26),
+        new THREE.MeshStandardMaterial({ color: 0x2a1800, roughness: 1.0, side: THREE.DoubleSide })
+    );
+    holeRing.position.set(2.02, 0.54, 0.40);
+    holeRing.rotation.y = -Math.PI * 0.32;
+    grupo.add(holeRing);
+
+    // flap de metal dobrado
+    const flap = new THREE.Mesh(new THREE.PlaneGeometry(0.42, 0.32), matFlap);
+    flap.position.set(2.06, 0.32, 0.58);
+    flap.rotation.set(0.30, -1.02, 0.22);
+    grupo.add(flap);
+
+    grupo.scale.setScalar(0.35);
+    grupo.position.set(-5, 6.3, 15);
+    cena.add(grupo);
+
+    return { grupo, eyeGlowMeshes, eyeGlowLights };
+}
+
 export function criarObjetosComplexos(cena) {
     // camera 1
     const camSeg1 = criarCameraSeguranca(cena,
@@ -363,6 +483,7 @@ export function criarObjetosComplexos(cena) {
     const ventoinha = criarVentoinha(cena);
     const painel    = criarPainel(cena);
     const cupcake   = criarCupcakeObj(cena);
+    const golden    = criarGoldenHeadObj(cena);
 
-    return { camSeg: [camSeg1, camSeg2], ventoinha, painel, cupcake };
+    return { camSeg: [camSeg1, camSeg2], ventoinha, painel, cupcake, golden };
 }

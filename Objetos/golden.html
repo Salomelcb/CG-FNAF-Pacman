@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Golden Freddy – Three.js</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #111; overflow: hidden; }
+    canvas { display: block; }
+    #hud {
+      position: absolute;
+      top: 14px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: #ffd700;
+      font-family: 'Courier New', monospace;
+      font-size: 13px;
+      letter-spacing: 4px;
+      text-align: center;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+<div id="hud">GOLDEN FREDDY &nbsp;|&nbsp; drag ◆ orbitar &nbsp; scroll ◆ zoom</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+// ── RENDERER ─────────────────────────────────────────────────────
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+
+// ── SCENE / CAMERA ───────────────────────────────────────────────
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x111111);
+
+const camera = new THREE.PerspectiveCamera(42, innerWidth / innerHeight, 0.1, 80);
+camera.position.set(0, 0, 10);
+
+// ── ORBIT CONTROLS ───────────────────────────────────────────────
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.07;
+controls.minDistance = 4;
+controls.maxDistance = 24;
+controls.target.set(0, -0.3, 0);
+
+// ── ILUMINAÇÃO ───────────────────────────────────────────────────
+scene.add(new THREE.AmbientLight(0xfff5e0, 0.5));
+const dirA = new THREE.DirectionalLight(0xfff0cc, 0.1);
+dirA.position.set(2, 4, 6);
+scene.add(dirA);
+const dirB = new THREE.DirectionalLight(0xffffff, 0.1);
+dirB.position.set(-3, -1, 3);
+scene.add(dirB);
+
+// ── MATERIAIS ────────────────────────────────────────────────────
+const MAT = {
+  gold:  new THREE.MeshStandardMaterial({ color: 0xc2803a, roughness: 0.80, metalness: 0.05 }),
+  rusty: new THREE.MeshStandardMaterial({ color: 0x8a5220, roughness: 0.92, metalness: 0.02 }),
+  dark:  new THREE.MeshStandardMaterial({ color: 0x0d0d0d, roughness: 0.80, metalness: 0.10 }),
+  void:  new THREE.MeshStandardMaterial({ color: 0x030303, roughness: 1.00 }),
+  teeth: new THREE.MeshStandardMaterial({ color: 0xdddccc, roughness: 0.50 }),
+  gum:   new THREE.MeshStandardMaterial({ color: 0x3a1808, roughness: 0.90 }),
+  hat:   new THREE.MeshStandardMaterial({ color: 0x111118, roughness: 0.75, metalness: 0.20 }),
+  band:  new THREE.MeshStandardMaterial({ color: 0x1e1000, roughness: 0.72 }),
+  dot:   new THREE.MeshStandardMaterial({ color: 0x7a5000, roughness: 0.95 }),
+  flap:  new THREE.MeshStandardMaterial({ color: 0x7a5a08, roughness: 0.85, metalness: 0.50, side: THREE.DoubleSide }),
+};
+
+function eyeGlowMat() {
+  return new THREE.MeshStandardMaterial({
+    color: 0xffee00, emissive: new THREE.Color(0xffbb00),
+    emissiveIntensity: 1.0, roughness: 0.10,
+  });
+}
+
+// ── HEAD GROUP ───────────────────────────────────────────────────
+const head = new THREE.Group();
+scene.add(head);
+
+function mk(geo, mat, pos, scl, rot) {
+  const m = new THREE.Mesh(geo, mat);
+  if (pos) m.position.set(...pos);
+  if (scl) m.scale.set(...scl);
+  if (rot) m.rotation.set(...rot);
+  head.add(m);
+  return m;
+}
+
+// ── CABEÇA ───────────────────────────────────────────────────────
+mk(new THREE.SphereGeometry(2, 48, 48), MAT.gold, [0, 0, 0], [1.08, 1.0, 0.94]);
+
+// ── ORELHAS ──────────────────────────────────────────────────────
+// orelha esquerda
+mk(new THREE.SphereGeometry(0.58, 22, 22), MAT.gold,  [-1.72, 1.64, 0],        [1.0, 0.95, 0.42]);
+mk(new THREE.SphereGeometry(0.36, 16, 16), MAT.rusty, [-1.72, 1.64, 0 + 0.18], [1.0, 0.90, 0.28]);
+
+/*// orelha direita
+mk(new THREE.SphereGeometry(0.58, 22, 22), MAT.gold,  [1.72, 1.64, 0],        [1.0, 0.95, 0.42]);
+mk(new THREE.SphereGeometry(0.36, 16, 16), MAT.rusty, [1.72, 1.64, 0 + 0.18], [1.0, 0.90, 0.28]);
+*/
+
+// ── OLHOS ────────────────────────────────────────────────────────
+// sockets escuros grandes
+const EYE_X = 0.76;
+const EYE_Y = 0.6;
+
+const eyeGlowMeshes = [];
+const eyeGlowLights = [];
+
+[[-EYE_X, EYE_Y], [EYE_X, EYE_Y]].forEach(([ex, ey]) => {
+  // socket oval escuro
+  mk(new THREE.SphereGeometry(0.52, 24, 24), MAT.void, [ex, ey, 1.45], [1.0, 0.80, 1.0]);
+  // íris ring
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.28, 0.055, 8, 28), MAT.dark);
+  ring.position.set(ex, ey, 1.10);
+  head.add(ring);
+  // pupila brilhante
+  const em = eyeGlowMat();
+  const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.20, 16, 16), em);
+  pupil.position.set(ex, ey, 1.14);
+  head.add(pupil);
+  eyeGlowMeshes.push(pupil);
+  // luz pontual do olho
+  const pl = new THREE.PointLight(0xffee00, 1.0, 4.0);
+  pl.position.set(ex, ey, 2.4);
+  head.add(pl);
+  eyeGlowLights.push(pl);
+});
+
+// ── SOBRANCELHAS ─────────────────────────────────────────────────
+// canto interior mais baixo → aspeto carrancudo
+mk(new THREE.BoxGeometry(0.58, 0.10, 0.08), MAT.dark, [-EYE_X, EYE_Y + 0.5, 1.92], null, [0, 0,  0.28]);
+mk(new THREE.BoxGeometry(0.58, 0.10, 0.08), MAT.dark, [ EYE_X, EYE_Y + 0.5, 1.92], null, [0, 0, -0.28]);
+
+// ── FOCINHO — dois puffs separados ───────────────────────────────
+// esfera esquerda
+mk(new THREE.SphereGeometry(0.80, 26, 26), MAT.rusty, [-0.50, -0.30, 1.5], [1.0, 0.90, 0.86]);
+// esfera direita
+mk(new THREE.SphereGeometry(0.80, 26, 26), MAT.rusty, [ 0.50, -0.30, 1.5], [1.0, 0.90, 0.86]);
+
+// nariz pequeno no centro/topo dos puffs
+mk(new THREE.SphereGeometry(0.2, 12, 12), MAT.dark, [0, 0.08, 2.00], [1.4, 0.80, 1.0]);
+
+// ── DENTES SUPERIORES (5, em arco) ───────────────────────────────
+// arco de raio R centrado em (0, -0.98, CZ), half-span ±35°
+/*{
+  const R = 1.05, CZ = 1.02, Y = -0.98, SPAN = 0.610;
+  for (let i = 0; i < 5; i++) {
+    const a = (i / 4 - 0.5) * 2 * SPAN;
+    mk(new THREE.BoxGeometry(0.22, 0.36, 0.16), MAT.teeth,
+       [R * Math.sin(a), Y, CZ + R * Math.cos(a)], null, [0, -a, 0]);
+  }
+}*/
+
+// ── VOID DA BOCA — recuado para não colidir com os dentes ────────
+mk(new THREE.SphereGeometry(1.0, 26, 26), MAT.void, [0, -1.20, 0.35], [1.18, 0.60, 0.82]);
+
+// ── MAXILAR INFERIOR — dois puffs achatados, extensos para a frente
+mk(new THREE.SphereGeometry(0.82, 26, 26), MAT.rusty, [-0.22, -1.25, 1.30], [1.05, 0.58, 1.20]);
+mk(new THREE.SphereGeometry(0.82, 26, 26), MAT.rusty, [ 0.22, -1.25, 1.30], [1.05, 0.58, 1.20]);
+
+// ── DENTES INFERIORES (4, em arco) ───────────────────────────────
+// arco de raio R centrado em (0, -1.26, CZ), half-span ±25°
+/*{
+  const R = 0.95, CZ = 1.0, Y = -1.26, SPAN = 0.436;
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 3 - 0.5) * 2 * SPAN;
+    mk(new THREE.BoxGeometry(0.22, 0.30, 0.16), MAT.teeth,
+       [R * Math.sin(a), Y, CZ + R * Math.cos(a)], null, [0, -a, 0]);
+  }
+}*/
+
+// ── PONTOS DE BOCHECHA ───────────────────────────────────────────
+const DOT_MAT = new THREE.MeshStandardMaterial({ color: 0x0d0d0d, roughness: 0.95 });
+// triângulo esquerdo: 2 em cima, 1 em baixo
+[[-0.86,-0.18],[-0.58,-0.18],[-0.72,-0.40],
+// triângulo direito: simétrico
+  [ 0.58,-0.18],[ 0.86,-0.18],[ 0.72,-0.40]].forEach(([dx, dy]) => {
+  mk(new THREE.SphereGeometry(0.07, 8, 8), DOT_MAT, [dx, dy, 2.2]);
+});
+
+// ── CHAPÉU ───────────────────────────────────────────────────────
+const hatG = new THREE.Group();
+hatG.position.set(0, 1.96, 0);
+head.add(hatG);
+
+function hatMk(geo, mat, py) {
+  const m = new THREE.Mesh(geo, mat);
+  m.position.y = py;
+  hatG.add(m);
+}
+hatMk(new THREE.CylinderGeometry(1.05, 1.05, 0.10, 40), MAT.hat,  0.00);  // aba
+hatMk(new THREE.CylinderGeometry(0.72, 0.74, 1.20, 40), MAT.hat,  0.65);  // corpo
+hatMk(new THREE.CylinderGeometry(0.72, 0.72, 0.08, 40), MAT.hat,  1.26);  // topo
+hatMk(new THREE.CylinderGeometry(0.73, 0.73, 0.18, 40), MAT.band, 0.12);  // fita
+
+// ── FIOS EXPOSTOS (lado direito, +X) ─────────────────────────────
+const WIRES = [
+  { hex: 0xff2020, r: 0.026, pts: [[1.88,0.90,0.12],[2.14,0.54,0.46],[2.06,0.14,0.78],[1.90,-0.22,1.04],[1.74,-0.52,1.26]] },
+  { hex: 0xdddddd, r: 0.020, pts: [[1.84,0.62,0.02],[2.18,0.26,0.34],[2.12,-0.06,0.64],[1.94,-0.36,0.96],[1.80,-0.72,1.30]] },
+  { hex: 0x2266ff, r: 0.022, pts: [[1.90,1.08,-0.02],[2.24,0.68,0.28],[2.18,0.28,0.58],[2.02,-0.14,0.88],[1.80,-0.46,1.10]] },
+  { hex: 0x111111, r: 0.030, pts: [[1.88,0.44,-0.10],[2.24,0.08,0.22],[2.18,-0.20,0.52],[2.00,-0.44,0.82],[1.86,-0.82,1.18]] },
+];
+
+WIRES.forEach(({ hex, r, pts }) => {
+  const mat = new THREE.MeshStandardMaterial({ color: hex, roughness: 0.35, metalness: 0.78 });
+  const crv = new THREE.CatmullRomCurve3(pts.map(([x, y, z]) => new THREE.Vector3(x, y, z)));
+  const geo = new THREE.TubeGeometry(crv, 22, r, 7, false);
+  head.add(new THREE.Mesh(geo, mat));
+});
+
+// anel de dano
+const holeRing = new THREE.Mesh(
+  new THREE.RingGeometry(0.22, 0.44, 26),
+  new THREE.MeshStandardMaterial({ color: 0x2a1800, roughness: 1.0, side: THREE.DoubleSide })
+);
+holeRing.position.set(2.02, 0.54, 0.40);
+holeRing.rotation.y = -Math.PI * 0.32;
+head.add(holeRing);
+
+// flap de metal dobrado
+const flap = new THREE.Mesh(new THREE.PlaneGeometry(0.42, 0.32), MAT.flap);
+flap.position.set(2.06, 0.32, 0.58);
+flap.rotation.set(0.30, -1.02, 0.22);
+head.add(flap);
+
+// ── LOOP DE ANIMAÇÃO ─────────────────────────────────────────────
+const clock = new THREE.Clock();
+
+(function loop() {
+  requestAnimationFrame(loop);
+  const t = clock.getElapsedTime();
+
+  // pulso dos olhos
+  const pulse = 0.5 + 0.5 * Math.sin(t * 2);
+  eyeGlowMeshes.forEach(m  => (m.material.emissiveIntensity = 0.5 + pulse * 1.2));
+  eyeGlowLights.forEach(pl => (pl.intensity = 0.4 + pulse * 1));
+
+  // flutuação suave
+  head.position.y = Math.sin(t * 0.62) * 0.08;
+  head.rotation.z = Math.sin(t * 0.48) * 0.015;
+
+  controls.update();
+  renderer.render(scene, camera);
+})();
+
+// ── RESIZE ───────────────────────────────────────────────────────
+window.addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>

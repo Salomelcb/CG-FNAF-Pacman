@@ -28,8 +28,9 @@ let spritesPacman   = [];
 let telaDificuldade, iniciarRuidoDuto;
 let objetosCena = {};
 
-// inspecao do cupcake
+// inspecao de objetos
 let emInspecao = false;
+let objetoEmInspecao = null; // 'cupcake' | 'golden'
 let emAberturaInsp = false;
 let progressoAbertura = 0;
 let emFechandoInsp = false;
@@ -37,6 +38,9 @@ let progressoFechamento = 0;
 const cupcakePosOriginal  = new THREE.Vector3();
 const CUPCAKE_SCALE_SHELF = 0.65;
 const CUPCAKE_SCALE_INSP  = 0.30;
+const goldenPosOriginal   = new THREE.Vector3();
+const GOLDEN_SCALE_SHELF  = 0.35;
+const GOLDEN_SCALE_INSP   = 0.18;
 
 let rendererInsp = null;
 let cenaInsp     = null;
@@ -96,7 +100,10 @@ function initInspRenderer() {
         const my = -(e.clientY / window.innerHeight) * 2 + 1;
         const ray = new THREE.Raycaster();
         ray.setFromCamera(new THREE.Vector2(mx, my), camaraInsp);
-        if (ray.intersectObjects([objetosCena.cupcake.grupo], true).length === 0)
+        const alvo = objetoEmInspecao === 'golden'
+            ? objetosCena.golden?.grupo
+            : objetosCena.cupcake?.grupo;
+        if (!alvo || ray.intersectObjects([alvo], true).length === 0)
             fecharInspecao();
         e.stopPropagation();
     });
@@ -210,9 +217,12 @@ function onMouseMove(event) {
         }
     }
 
-    if (objetosCena.cupcake && estadoAtual === 'menu') {
-        const hits = raycaster.intersectObjects([objetosCena.cupcake.grupo], true);
-        if (hits.length > 0) document.body.style.cursor = 'pointer';
+    if (estadoAtual === 'menu') {
+        const alvos = [];
+        if (objetosCena.cupcake) alvos.push(objetosCena.cupcake.grupo);
+        if (objetosCena.golden)  alvos.push(objetosCena.golden.grupo);
+        if (alvos.length > 0 && raycaster.intersectObjects(alvos, true).length > 0)
+            document.body.style.cursor = 'pointer';
     }
 }
 
@@ -222,9 +232,15 @@ function onClick(event) {
     mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
     raycaster.setFromCamera(mouse, camara);
 
-    if (objetosCena.cupcake && estadoAtual === 'menu') {
-        const hits = raycaster.intersectObjects([objetosCena.cupcake.grupo], true);
-        if (hits.length > 0) { abrirInspecao(); return; }
+    if (estadoAtual === 'menu') {
+        if (objetosCena.golden) {
+            const hits = raycaster.intersectObjects([objetosCena.golden.grupo], true);
+            if (hits.length > 0) { abrirInspecao('golden'); return; }
+        }
+        if (objetosCena.cupcake) {
+            const hits = raycaster.intersectObjects([objetosCena.cupcake.grupo], true);
+            if (hits.length > 0) { abrirInspecao('cupcake'); return; }
+        }
     }
 
     const intersects = raycaster.intersectObjects(botoesClicaveis, true);
@@ -232,20 +248,74 @@ function onClick(event) {
         const obj = intersects[0].object;
         if (obj === btnStart)   iniciarEntradaDuto();
         if (obj === btnOptions) console.log('OPÇÕES');
-        if (obj === btnExit)    console.log('SAIR');
+        if (obj === btnExit)    sairJogo();
     }
 }
 
-function abrirInspecao() {
-    if (emInspecao || estadoAtual !== 'menu' || !objetosCena.cupcake) return;
-    emInspecao = true;
-    cupcakePosOriginal.copy(objetosCena.cupcake.grupo.position);
+function sairJogo() {
+    if (estadoAtual !== 'menu') return;
+    estadoAtual = 'saindo';
 
-    cena.remove(objetosCena.cupcake.grupo);
-    objetosCena.cupcake.grupo.position.set(0, -0.4, 0);
-    objetosCena.cupcake.grupo.scale.setScalar(0.08);
-    objetosCena.cupcake.grupo.rotation.set(0, 0, 0);
-    cenaInsp.add(objetosCena.cupcake.grupo);
+    // fade a preto
+    fadeOverlay.style.transition = 'opacity 1.4s ease';
+    fadeOverlay.style.opacity = '1';
+    fadeOverlay.style.pointerEvents = 'auto';
+
+    // mensagem de despedida estilo FNAF
+    const msg = document.createElement('div');
+    Object.assign(msg.style, {
+        position: 'fixed', inset: '0', zIndex: '20',
+        display: 'flex', flexDirection: 'column',
+        alignItems: 'center', justifyContent: 'center',
+        fontFamily: "'Courier New', monospace",
+        color: '#cc1010', opacity: '0',
+        transition: 'opacity 0.9s ease',
+        pointerEvents: 'none', textAlign: 'center', gap: '18px'
+    });
+    msg.innerHTML = `
+        <div style="font-size:clamp(0.85em,1.4vw,1em);letter-spacing:8px;color:#661010">FREDDY FAZBEAR'S PIZZA</div>
+        <div style="font-size:clamp(1.6em,3vw,2.4em);letter-spacing:10px;text-shadow:0 0 18px #cc0000,0 0 40px #660000">THANK YOU FOR PLAYING</div>
+        <div style="font-size:clamp(0.75em,1.2vw,0.9em);letter-spacing:5px;color:#772222;margin-top:6px">HOPE TO SEE YOU AGAIN...</div>
+    `;
+    document.body.appendChild(msg);
+
+    setTimeout(() => { msg.style.opacity = '1'; }, 700);
+
+    setTimeout(() => {
+        window.close();
+        // fallback caso window.close() seja bloqueado pelo browser
+        msg.innerHTML += `<div style="font-size:clamp(0.65em,1vw,0.78em);letter-spacing:4px;color:#441111;margin-top:20px">[ podes fechar esta janela ]</div>`;
+    }, 3000);
+}
+
+function abrirInspecao(tipo = 'cupcake') {
+    if (emInspecao || estadoAtual !== 'menu') return;
+    if (tipo === 'cupcake' && !objetosCena.cupcake) return;
+    if (tipo === 'golden'  && !objetosCena.golden)  return;
+
+    emInspecao = true;
+    objetoEmInspecao = tipo;
+
+    let grupo, tituloHtml;
+    if (tipo === 'cupcake') {
+        grupo = objetosCena.cupcake.grupo;
+        cupcakePosOriginal.copy(grupo.position);
+        camaraInsp.position.set(0, 0.55, 3.4);
+        camaraInsp.lookAt(0, 0.15, 0);
+        tituloHtml = `<span style="font-size:0.6em;font-weight:400;color:#dddddd;letter-spacing:0.03em;">O companheiro inseparável de Chica</span><br><span style="font-size:0.45em;font-weight:300;color:#999999;letter-spacing:0.02em;">clica fora para fechar</span>`;
+    } else {
+        grupo = objetosCena.golden.grupo;
+        goldenPosOriginal.copy(grupo.position);
+        camaraInsp.position.set(0, 0.3, 5.0);
+        camaraInsp.lookAt(0, 0.3, 0);
+        tituloHtml = `<span style="font-size:0.6em;font-weight:400;color:#dddddd;letter-spacing:0.03em;">Golden Freddy</span><br><span style="font-size:0.45em;font-weight:300;color:#999999;letter-spacing:0.02em;">clica fora para fechar</span>`;
+    }
+
+    cena.remove(grupo);
+    grupo.position.set(0, -0.4, 0);
+    grupo.scale.setScalar(0.08);
+    grupo.rotation.set(0, 0, 0);
+    cenaInsp.add(grupo);
     emAberturaInsp = true;
     progressoAbertura = 0;
 
@@ -254,6 +324,7 @@ function abrirInspecao() {
     requestAnimationFrame(() => { rendererInsp.domElement.style.opacity = '1'; });
 
     inspecaoOverlay.style.display = 'flex';
+    inspecaoTitulo.innerHTML = tituloHtml;
     inspecaoTitulo.style.transition = 'none';
     inspecaoTitulo.style.opacity    = '0';
     setTimeout(() => {
@@ -303,42 +374,59 @@ function loop() {
         chamaExt.scale.setScalar(flk);
         chamaInt.scale.set(flk, 0.94 + Math.sin(tempo * 24) * 0.06, flk);
         const baseInt = 1.2 + Math.sin(tempo * 16) * 0.3 + (Math.random() - 0.5) * 0.15;
-        flameLight.intensity = emInspecao ? baseInt * 14 : baseInt;
-        flameLight.distance  = emInspecao ? 18 : 3;
+        flameLight.intensity = objetoEmInspecao === 'cupcake' ? baseInt * 14 : baseInt;
+        flameLight.distance  = objetoEmInspecao === 'cupcake' ? 18 : 3;
     }
 
-    if (emInspecao && objetosCena.cupcake) {
-        if (emFechandoInsp) {
-            progressoFechamento = Math.min(1, progressoFechamento + delta * 2.0);
-            const inv = 1 - progressoFechamento;
-            const eased = 1 - Math.pow(1 - inv, 3);
-            objetosCena.cupcake.grupo.position.y = -1.2 + eased * 1.1;
-            objetosCena.cupcake.grupo.scale.setScalar(eased * CUPCAKE_SCALE_INSP);
-            if (progressoFechamento >= 1) {
-                rendererInsp.domElement.style.transition = 'opacity 0.3s ease';
-                rendererInsp.domElement.style.opacity = '0';
-                emFechandoInsp = false;
-                emInspecao = false;
-                if (objetosCena.cupcake.flameLight) objetosCena.cupcake.flameLight.distance = 3;
-                setTimeout(() => {
-                    cenaInsp.remove(objetosCena.cupcake.grupo);
-                    objetosCena.cupcake.grupo.position.copy(cupcakePosOriginal);
-                    objetosCena.cupcake.grupo.scale.setScalar(CUPCAKE_SCALE_SHELF);
-                    objetosCena.cupcake.grupo.rotation.set(0, 0, 0);
-                    cena.add(objetosCena.cupcake.grupo);
-                    rendererInsp.domElement.style.display = 'none';
-                    inspecaoOverlay.style.display = 'none';
-                    botoesClicaveis.forEach(b => { b.userData.clicavel = true; });
-                }, 320);
+    if (objetosCena.golden) {
+        const { eyeGlowMeshes, eyeGlowLights } = objetosCena.golden;
+        const pulse = 0.5 + 0.5 * Math.sin(tempo * 2.0);
+        eyeGlowMeshes.forEach(m  => { m.material.emissiveIntensity = 0.5 + pulse * 1.2; });
+        eyeGlowLights.forEach(pl => { pl.intensity = 0.4 + pulse * 1.0; });
+    }
+
+    if (emInspecao) {
+        const isGolden  = objetoEmInspecao === 'golden';
+        const grupo     = isGolden ? objetosCena.golden?.grupo  : objetosCena.cupcake?.grupo;
+        const scaleInsp = isGolden ? GOLDEN_SCALE_INSP          : CUPCAKE_SCALE_INSP;
+
+        if (grupo) {
+            if (emFechandoInsp) {
+                progressoFechamento = Math.min(1, progressoFechamento + delta * 2.0);
+                const inv   = 1 - progressoFechamento;
+                const eased = 1 - Math.pow(1 - inv, 3);
+                grupo.position.y = -1.2 + eased * 1.1;
+                grupo.scale.setScalar(eased * scaleInsp);
+                if (progressoFechamento >= 1) {
+                    rendererInsp.domElement.style.transition = 'opacity 0.3s ease';
+                    rendererInsp.domElement.style.opacity = '0';
+                    emFechandoInsp = false;
+                    emInspecao = false;
+                    if (!isGolden && objetosCena.cupcake?.flameLight)
+                        objetosCena.cupcake.flameLight.distance = 3;
+                    const posOrig    = isGolden ? goldenPosOriginal.clone() : cupcakePosOriginal.clone();
+                    const scaleShelf = isGolden ? GOLDEN_SCALE_SHELF : CUPCAKE_SCALE_SHELF;
+                    objetoEmInspecao = null;
+                    setTimeout(() => {
+                        cenaInsp.remove(grupo);
+                        grupo.position.copy(posOrig);
+                        grupo.scale.setScalar(scaleShelf);
+                        grupo.rotation.set(0, 0, 0);
+                        cena.add(grupo);
+                        rendererInsp.domElement.style.display = 'none';
+                        inspecaoOverlay.style.display = 'none';
+                        botoesClicaveis.forEach(b => { b.userData.clicavel = true; });
+                    }, 320);
+                }
+            } else if (emAberturaInsp) {
+                progressoAbertura = Math.min(1, progressoAbertura + delta * 1.7);
+                const t = 1 - Math.pow(1 - progressoAbertura, 3);
+                grupo.position.y = -1.2 + t * 1.1;
+                grupo.scale.setScalar(t * scaleInsp);
+                if (progressoAbertura >= 1) emAberturaInsp = false;
+            } else {
+                grupo.rotation.y += delta * 1.4;
             }
-        } else if (emAberturaInsp) {
-            progressoAbertura = Math.min(1, progressoAbertura + delta * 1.7);
-            const t = 1 - Math.pow(1 - progressoAbertura, 3);
-            objetosCena.cupcake.grupo.position.y = -1.2 + t * 1.1;
-            objetosCena.cupcake.grupo.scale.setScalar(t * CUPCAKE_SCALE_INSP);
-            if (progressoAbertura >= 1) emAberturaInsp = false;
-        } else {
-            objetosCena.cupcake.grupo.rotation.y += delta * 1.4;
         }
         rendererInsp.render(cenaInsp, camaraInsp);
     }
