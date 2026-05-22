@@ -33,6 +33,23 @@ let elapsedTime     = 0;
 let canvasMapa = null, ctxMapa = null;
 let luzesFlicker = [];
 
+// ─── INIMIGOS ──────────────────────────────────────────────────────
+let inimigos = [];
+// { nome, modelo, mixer, clipIdle, clipAndar, clipJumpscare,
+//   acaoAtual, spawnPos, velocidade, ativo, emMovimento }
+
+// posicoes de spawn (Y preenchido depois de saber o floor)
+const SPAWN_FREDDY = new THREE.Vector3( 0.0, 0, -36);
+const SPAWN_BONNIE = new THREE.Vector3(-4.0, 0, -36);
+const SPAWN_CHICA  = new THREE.Vector3( 4.0, 0, -36);
+const SPAWN_FOXY   = new THREE.Vector3(-9.0, 0, -26);
+
+// ─── ESTADO DO JOGO ────────────────────────────────────────────────
+const TOKENS_FOXY   = 10; // tokens para o Foxy sair da cove
+let tempoJogo       = 0;
+let jogoIniciado    = false;
+const alertas       = { freddy: false, bonnie: false, chica: false, foxy: false };
+
 // intro camera (sair do duto para o escritorio)
 let introCamera   = false;
 let introProgress = 0;
@@ -124,6 +141,9 @@ export function iniciarJogo(renderer) {
         mapaMin.copy(box.min);
         mapaMax.copy(box.max);
 
+        // carrega spawn zones antes dos personagens
+        carregarSpawnZones(box.min.y);
+
         // luzes do teto — mais estragadas, mais dramaticas
         const ceilY = box.max.y - 0.3;
         [
@@ -138,20 +158,20 @@ export function iniciarJogo(renderer) {
             luzesFlicker.push({ luz, fase: Math.random() * Math.PI * 2, estragada });
         });
 
+        // fade mais lento (1.2s) e só remove após a transição terminar
+        loadDiv.style.transition = 'opacity 1.2s ease';
         loadDiv.style.opacity = '0';
         setTimeout(() => {
             loadDiv.remove();
             const ov = document.getElementById('fnaf-overlay');
             if (ov) { ov.style.transition = 'none'; ov.style.opacity = '0'; }
-            // sai do duto a avancar: comeca atras (norte/cacifos, Z+), olha para sul (desk), avanca
             introStart.set(playerPos.x, playerPos.y + EYE_HEIGHT * 0.6, playerPos.z + 0.8);
             introEnd.set(  playerPos.x, playerPos.y + EYE_HEIGHT, playerPos.z);
             introCamera   = true;
             introProgress = 0;
-            // flicker de luzes simultaneo
             acordando        = true;
             acordarProgresso = 0;
-        }, 820);
+        }, 1400);
     },
     xhr => {
         if (xhr.total) {
@@ -219,9 +239,27 @@ export function iniciarJogo(renderer) {
             if (introProgress >= 1) introCamera = false;
         }
 
+        // mixers das animacoes dos personagens
+        inimigos.forEach(ini => { if (ini.mixer) ini.mixer.update(delta); });
+
+        // gestao do jogo — so depois do accordar e intro
+        if (!acordando && !introCamera) {
+            if (!jogoIniciado) {
+                jogoIniciado = true;
+                mostrarMensagemInicio();
+            }
+            tempoJogo += delta;
+            // timers desativados enquanto ajustamos posicoes — mudar depois
+            //if (tempoJogo > 30  && !alertas.freddy) ativarInimigo('freddy');
+            //if (tempoJogo > 70  && !alertas.bonnie) ativarInimigo('bonnie');
+            //if (tempoJogo > 110 && !alertas.chica)  ativarInimigo('chica');
+            //if (tokensApanhados >= TOKENS_FOXY && !alertas.foxy) ativarInimigo('foxy');
+        }
+
         atualizarMovimento(delta);
         atualizarCamera();
         atualizarTokens();
+        atualizarInimigos(delta);
         atualizarMinimapa();
 
         renderer.render(cenaJogo, camaraJogo);
@@ -576,6 +614,19 @@ function atualizarMinimapa() {
         ctxMapa.beginPath(); ctxMapa.arc(tx, ty, 3, 0, Math.PI*2); ctxMapa.fill();
     });
 
+    // inimigos — ponto vermelho + letra inicial
+    inimigos.forEach(ini => {
+        const ip = ini.modelo.position;
+        const ex = (ip.x - playerPos.x) * S;
+        const ey = (ip.z - playerPos.z) * S;
+        ctxMapa.fillStyle = '#ff2222';
+        ctxMapa.beginPath(); ctxMapa.arc(ex, ey, 5, 0, Math.PI*2); ctxMapa.fill();
+        ctxMapa.fillStyle = '#ffffff';
+        ctxMapa.font = 'bold 7px monospace';
+        ctxMapa.textAlign = 'center';
+        ctxMapa.fillText(ini.nome[0].toUpperCase(), ex, ey + 2.5);
+    });
+
     ctxMapa.restore();
 
     // seta do jogador — sempre no centro a apontar para cima
@@ -590,6 +641,31 @@ function atualizarMinimapa() {
     ctxMapa.fillStyle = '#ff88ff';
     ctxMapa.font = 'bold 11px monospace';
     ctxMapa.fillText(`${tokensApanhados} / ${totalTokens}`, 6, H-6);
+}
+
+function jogoOver(nomeInimigo) {
+    // evitar multiplos triggers
+    inimigos.forEach(i => { i.ativo = false; });
+    jogoIniciado = false;
+
+    const el = document.createElement('div');
+    Object.assign(el.style, {
+        position: 'fixed', inset: '0', zIndex: '60',
+        display: 'flex', flexDirection: 'column',
+        alignItems: 'center', justifyContent: 'center',
+        background: 'rgba(0,0,0,0)',
+        fontFamily: "'Courier New', monospace",
+        color: '#ff2222', textAlign: 'center',
+        transition: 'background 0.4s ease', pointerEvents: 'none'
+    });
+    el.innerHTML = `
+        <div style="font-size:clamp(2em,5vw,3.5em);letter-spacing:10px;
+             text-shadow:0 0 30px #ff0000">GAME OVER</div>
+        <div style="font-size:clamp(0.8em,1.4vw,1em);letter-spacing:4px;
+             color:#888;margin-top:18px">apanhado pelo ${nomeInimigo.toUpperCase()}</div>
+    `;
+    document.body.appendChild(el);
+    requestAnimationFrame(() => { el.style.background = 'rgba(0,0,0,0.88)'; });
 }
 
 function criarHUD() {
@@ -617,4 +693,328 @@ function criarHUD() {
     setInterval(() => {
         coords.textContent = `X:${playerPos.x.toFixed(1)}  Z:${playerPos.z.toFixed(1)}`;
     }, 100);
+}
+
+// ─── SPAWN ZONES ──────────────────────────────────────────────────
+let spawnPalco = null; // bb do plano do palco (Freddy/Bonnie/Chica)
+let spawnCova  = null; // bb do circulo do Foxy
+
+function carregarSpawnZones(floorY) {
+    loader.load('./Models/spawnAnimatronics.glb', gltf => {
+        const zonas = [];
+        gltf.scene.traverse(o => {
+            if (!o.isMesh) return;
+            o.visible = false;
+            const bb = new THREE.Box3().setFromObject(o);
+            const sz = bb.getSize(new THREE.Vector3());
+            zonas.push({ bb, centro: bb.getCenter(new THREE.Vector3()), area: sz.x * sz.z });
+        });
+        zonas.sort((a, b) => b.area - a.area); // maior = palco
+        if (zonas.length >= 1) spawnPalco = zonas[0];
+        if (zonas.length >= 2) spawnCova  = zonas[1];
+        carregarPersonagens(floorY);
+    }, undefined, () => {
+        console.warn('spawnAnimatronics.glb nao encontrado, usando posicoes padrao');
+        carregarPersonagens(floorY);
+    });
+}
+
+// corrige TODAS as matrizes de bind apos escalar um modelo com SkinnedMesh:
+// bindMatrix, bindMatrixInverse E boneInverses têm de estar alinhadas
+function corrigirEscalaSkinnedMesh(model) {
+    model.updateMatrixWorld(true);
+    model.traverse(o => {
+        if (!o.isSkinnedMesh) return;
+        // atualiza bindMatrix para a posicao world atual (com escala)
+        o.bindMatrix.copy(o.matrixWorld);
+        o.bindMatrixInverse.copy(o.matrixWorld).invert();
+        // atualiza boneInverses com as posicoes escaladas
+        o.skeleton.boneInverses.forEach((inv, i) => {
+            inv.copy(o.skeleton.bones[i].matrixWorld).invert();
+        });
+        o.skeleton.update();
+    });
+}
+
+// calcula minY apenas de meshes VISIVEIS (ignora party-hat kids escondidos)
+function calcMinY(model) {
+    let minY = Infinity;
+    model.updateMatrixWorld(true);
+    model.traverse(o => {
+        if ((!o.isMesh && !o.isSkinnedMesh) || !o.visible) return;
+        const geo = o.geometry;
+        if (!geo.boundingBox) geo.computeBoundingBox();
+        const wy = geo.boundingBox.min.clone().applyMatrix4(o.matrixWorld).y;
+        if (wy < minY) minY = wy;
+    });
+    return isFinite(minY) ? minY : 0;
+}
+
+function carregarPersonagens(floorY) {
+    SPAWN_FREDDY.set(-9.0, floorY + 3.5, -28);
+    SPAWN_BONNIE.set(-7.0, floorY + 5.0, -25);
+    SPAWN_CHICA.set(  4.0, floorY, -34); // inativo por agora
+    SPAWN_FOXY.set(  -9.0, floorY, -26); // inativo por agora
+
+    const ESC = { freddy: 2.6, bonnie: 2.0, chica: 0.018, foxy: 0.003 };
+
+    function loadChar(path, spawn, rotY, velocidade, escala, nome, clipNome) {
+        loader.load(path, gltf => {
+            const modelo = gltf.scene;
+            modelo.scale.setScalar(escala);
+            cenaJogo.add(modelo);
+
+            // posiciona no spawn
+            modelo.position.set(spawn.x, spawn.y, spawn.z);
+            console.log(`[${nome}] posicao final:`, modelo.position.x.toFixed(1), modelo.position.y.toFixed(1), modelo.position.z.toFixed(1), '| bb height:', new THREE.Box3().setFromObject(modelo).getSize(new THREE.Vector3()).y.toFixed(2));
+            modelo.rotation.y = rotY;
+
+            // emissive em TODOS os meshes (nao so SkinnedMesh) para visibilidade
+            modelo.traverse(o => {
+                if (!o.isMesh && !o.isSkinnedMesh) return;
+                const mats = Array.isArray(o.material) ? o.material : [o.material];
+                mats.forEach(m => {
+                    if (m.emissive) { m.emissive.set(0x0d0808); m.emissiveIntensity = 0.35; }
+                    m.needsUpdate = true;
+                });
+            });
+
+            // remove scale tracks — evitam deformacoes de proporcoes
+            gltf.animations.forEach(clip => {
+                clip.tracks = clip.tracks.filter(t => !t.name.endsWith('.scale'));
+            });
+
+            console.log(`[${nome}] clips disponiveis:`, gltf.animations.map(c => c.name));
+
+            // AnimationMixer — usa o clip indicado por nome (ou fallback para idle/walk)
+            const mixer = new THREE.AnimationMixer(modelo);
+            let clipIdle = null, clipAndar = null, clipJumpscare = null;
+
+            // tenta encontrar o clip especifico pedido
+            let clipEspecifico = clipNome
+                ? gltf.animations.find(c => c.name.toLowerCase().includes(clipNome.toLowerCase()))
+                : null;
+
+            gltf.animations.forEach(c => {
+                const n = c.name.toLowerCase();
+                if (n.includes('walk') || n.includes('run'))                                 clipAndar     = c;
+                else if (n.includes('jump') || n.includes('scare') || n.includes('attack'))  clipJumpscare = c;
+                else clipIdle = clipIdle || c;
+            });
+            if (!clipIdle && gltf.animations.length > 0) clipIdle = gltf.animations[0];
+
+            // usa clip especifico se existir, senao fallback
+            const clipParaTocar = clipEspecifico || clipIdle;
+            console.log(`[${nome}] clip escolhido: ${clipParaTocar?.name ?? 'NENHUM'}`);
+            let acaoAtual = null;
+            if (clipParaTocar) {
+                acaoAtual = mixer.clipAction(clipParaTocar);
+                acaoAtual.play();
+                mixer.update(0.1); // avanca mais para sair da bind pose
+            }
+
+            inimigos.push({
+                nome, modelo, mixer,
+                clipIdle, clipAndar, clipJumpscare, acaoAtual,
+                spawnPos: spawn.clone(), velocidade,
+                ativo: false, congelado: false,
+                posicionado: false  // snap para chaopaandar na 1ª frame
+            });
+        }, undefined, err => console.error('Erro ao carregar', nome, err));
+    }
+
+    loadChar('./Models/Personagens/rotten_freddy.glb', SPAWN_FREDDY,  0,    1.8, ESC.freddy, 'freddy', 'RottenFreddy-Idle');
+    loadChar('./Models/Personagens/bonnie.glb',        SPAWN_BONNIE,  0.25, 2.0, ESC.bonnie, 'bonnie', 'walk');
+}
+
+// ─── AI DOS INIMIGOS ───────────────────────────────────────────────
+
+function jogadorOlhaParaInimigo(ini) {
+    const dirParaIni = new THREE.Vector3()
+        .subVectors(ini.modelo.position, camaraJogo.position)
+        .normalize();
+    const camDir = new THREE.Vector3();
+    camaraJogo.getWorldDirection(camDir);
+    return camDir.dot(dirParaIni) > 0.55; // ~56° de campo de visao
+}
+
+function trocarClip(ini, clip) {
+    if (!clip || ini.acaoAtual?.getClip() === clip) return;
+    if (ini.acaoAtual) ini.acaoAtual.fadeOut(0.25);
+    ini.acaoAtual = ini.mixer.clipAction(clip);
+    ini.acaoAtual.reset().fadeIn(0.25).play();
+}
+
+function moverInimigo(ini, delta) {
+    const dir = new THREE.Vector3()
+        .subVectors(playerPos, ini.modelo.position)
+        .setY(0);
+    const dist = dir.length();
+    if (dist < 1.2) return; // ja chegou ao jogador
+    dir.normalize();
+
+    const passo = ini.velocidade * delta;
+    const nova  = ini.modelo.position.clone().addScaledVector(dir, passo);
+
+    // so anda no chaopaandar (colisao igual ao jogador)
+    const M = 0.3;
+    const valido = zonasCaminhaveis.some(bb =>
+        nova.x >= bb.min.x + M && nova.x <= bb.max.x - M &&
+        nova.z >= bb.min.z + M && nova.z <= bb.max.z - M
+    );
+    if (valido) {
+        ini.modelo.position.copy(nova);
+        ini.modelo.rotation.y = Math.atan2(dir.x, dir.z);
+        trocarClip(ini, ini.clipAndar || ini.clipIdle);
+    }
+}
+
+function snapParaChaopaandar(ini) {
+    // encontra o centro da zona walkable mais proxima do spawn pretendido
+    let melhor = null, melhorDist = Infinity;
+    zonasCaminhaveis.forEach(bb => {
+        const cx = (bb.min.x + bb.max.x) / 2;
+        const cz = (bb.min.z + bb.max.z) / 2;
+        const d = Math.hypot(ini.spawnPos.x - cx, ini.spawnPos.z - cz);
+        if (d < melhorDist) { melhorDist = d; melhor = { cx, cz }; }
+    });
+    if (melhor) {
+        ini.modelo.position.x = melhor.cx;
+        ini.modelo.position.z = melhor.cz;
+    }
+    ini.posicionado = true;
+}
+
+function atualizarInimigos(delta) {
+    if (!jogoIniciado) return;
+    const camDir = new THREE.Vector3();
+    camaraJogo.getWorldDirection(camDir);
+
+    inimigos.forEach(ini => {
+        // snap para zona walkable na 1a frame (chaopaandar ja carregado)
+        if (!ini.posicionado && zonasCaminhaveis.length > 0) snapParaChaopaandar(ini);
+        if (!ini.ativo) return;
+
+        const olha = jogadorOlhaParaInimigo(ini);
+
+        if (ini.nome === 'freddy') {
+            // Freddy ignora o olhar — move sempre
+            moverInimigo(ini, delta);
+        } else {
+            // Weeping Angel: congela quando o jogador olha
+            if (olha) {
+                ini.congelado = true;
+                trocarClip(ini, ini.clipIdle);
+            } else {
+                ini.congelado = false;
+                moverInimigo(ini, delta);
+            }
+        }
+
+        // verificar captura
+        const d2 = Math.hypot(
+            ini.modelo.position.x - playerPos.x,
+            ini.modelo.position.z - playerPos.z
+        );
+        if (d2 < 1.5) jogoOver(ini.nome);
+    });
+}
+
+// ─── MENSAGENS / ALERTAS ───────────────────────────────────────────
+
+function mostrarMensagemInicio() {
+    const el = document.createElement('div');
+    Object.assign(el.style, {
+        position: 'fixed', inset: '0', zIndex: '40',
+        display: 'flex', flexDirection: 'column',
+        alignItems: 'center', justifyContent: 'center',
+        background: 'rgba(0,0,0,0.72)',
+        fontFamily: "'Courier New', monospace",
+        color: '#dddddd', textAlign: 'center',
+        pointerEvents: 'none', opacity: '0',
+        transition: 'opacity 1s ease'
+    });
+    el.innerHTML = `
+        <div style="font-size:clamp(1.4em,2.8vw,2em);letter-spacing:6px;color:#ffcc00;margin-bottom:16px">
+            FREDDY FAZBEAR'S PIZZA
+        </div>
+        <div style="font-size:clamp(0.85em,1.6vw,1.1em);letter-spacing:3px;line-height:2.2;color:#cccccc">
+            APANHA TODOS OS TOKENS<br>
+            <span style="color:#ff6666">mas tem muito cuidado com eles...</span>
+        </div>
+    `;
+    document.body.appendChild(el);
+    requestAnimationFrame(() => { el.style.opacity = '1'; });
+    setTimeout(() => {
+        el.style.transition = 'opacity 1.5s ease';
+        el.style.opacity = '0';
+        setTimeout(() => el.remove(), 1600);
+    }, 4500);
+}
+
+const ALERTAS_CONFIG = {
+    freddy: {
+        titulo:   '⚠ FALHA DE SISTEMA',
+        msg:      'FREDDY FAZBEAR entrou em\nmodo de entretenimento autónomo.\n\nTenha uma boa noite.',
+        cor:      '#ff4444'
+    },
+    bonnie: {
+        titulo:   '📡 SINAL PERDIDO',
+        msg:      'Ligação ao BONNIE interrompida.\nÚltima localização conhecida: Palco.\nOs técnicos foram notificados.\n\n(Ninguém foi notificado.)',
+        cor:      '#9955ff'
+    },
+    chica: {
+        titulo:   '🍕 ALERTA DE COZINHA',
+        msg:      'CHICA abandonou o posto sem autorização.\nMotivo reportado: em busca de pizza.\n\nFique calmo. Não faça barulho.',
+        cor:      '#ffaa00'
+    },
+    foxy: {
+        titulo:   '☠ PIRATE COVE',
+        msg:      'AVARIA RESOLVIDA — Pirate Cove\nvolta a estar operacional.\n\nFOXY ESTÁ A CAMINHO.',
+        cor:      '#ff3300'
+    }
+};
+
+function mostrarAlerta(nome) {
+    const cfg = ALERTAS_CONFIG[nome];
+    if (!cfg) return;
+
+    const el = document.createElement('div');
+    Object.assign(el.style, {
+        position: 'fixed', top: '50%', left: '50%',
+        transform: 'translate(-50%,-50%)',
+        zIndex: '45', minWidth: '320px', maxWidth: '480px',
+        background: 'rgba(0,0,0,0.92)',
+        border: `1.5px solid ${cfg.cor}`,
+        boxShadow: `0 0 22px ${cfg.cor}44`,
+        fontFamily: "'Courier New', monospace",
+        color: cfg.cor, textAlign: 'center',
+        padding: '24px 32px', borderRadius: '4px',
+        opacity: '0', transition: 'opacity 0.5s ease',
+        pointerEvents: 'none'
+    });
+    el.innerHTML = `
+        <div style="font-size:1em;letter-spacing:5px;margin-bottom:14px;font-weight:bold">${cfg.titulo}</div>
+        <div style="font-size:0.72em;letter-spacing:2px;line-height:1.9;color:#cccccc;white-space:pre-line">${cfg.msg}</div>
+    `;
+    document.body.appendChild(el);
+    requestAnimationFrame(() => { el.style.opacity = '1'; });
+    setTimeout(() => {
+        el.style.opacity = '0';
+        setTimeout(() => el.remove(), 600);
+    }, 4000);
+}
+
+function ativarInimigo(nome) {
+    alertas[nome] = true;
+    mostrarAlerta(nome);
+    const ini = inimigos.find(i => i.nome === nome);
+    if (!ini) return;
+    ini.ativo = true;
+    // troca para clip de andar se existir
+    if (ini.clipAndar && ini.acaoAtual) {
+        ini.acaoAtual.stop();
+        ini.acaoAtual = ini.mixer.clipAction(ini.clipAndar);
+        ini.acaoAtual.play();
+    }
 }
