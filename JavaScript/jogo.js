@@ -752,11 +752,11 @@ function calcMinY(model) {
 
 function carregarPersonagens(floorY) {
     SPAWN_FREDDY.set(-9.0, floorY + 3.5, -28);
-    SPAWN_BONNIE.set(-7.0, floorY + 3.5, -25);
+    SPAWN_BONNIE.set(-7.0, floorY + 1.2, -25);
     SPAWN_CHICA.set(  4.0, floorY, -34); // inativo por agora
     SPAWN_FOXY.set(  -9.0, floorY, -26); // inativo por agora
 
-    const ESC = { freddy: 2.6, bonnie: 2.0, chica: 0.018, foxy: 0.003 };
+    const ESC = { freddy: 2.6, bonnie: 2.65, chica: 0.018, foxy: 0.003 };
 
     function loadChar(path, spawn, rotY, velocidade, escala, nome, clipNome) {
         loader.load(path, gltf => {
@@ -825,6 +825,8 @@ function carregarPersonagens(floorY) {
 
     loadChar('./Models/Personagens/rotten_freddy.glb', SPAWN_FREDDY,  0,    1.8, ESC.freddy, 'freddy', 'RottenFreddy-Idle');
     loadChar('./Models/Personagens/bonnie.glb',        SPAWN_BONNIE,  0.25, 2.0, ESC.bonnie, 'bonnie', 'walk');
+    loadChar('./Models/Personagens/chica.glb',         SPAWN_CHICA,   0,    1.9, ESC.chica,  'chica',  'Trans_DiningArea_A');
+    loadChar('./Models/Personagens/foxy.glb',          SPAWN_FOXY,    Math.PI/2, 3.0, ESC.foxy, 'foxy', 'Run');
 }
 
 // ─── AI DOS INIMIGOS ───────────────────────────────────────────────
