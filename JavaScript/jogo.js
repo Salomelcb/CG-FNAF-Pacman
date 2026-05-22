@@ -752,7 +752,7 @@ function calcMinY(model) {
 
 function carregarPersonagens(floorY) {
     SPAWN_FREDDY.set(-9.0, floorY + 3.5, -28);
-    SPAWN_BONNIE.set(-7.0, floorY + 5.0, -25);
+    SPAWN_BONNIE.set(-7.0, floorY + 3.5, -25);
     SPAWN_CHICA.set(  4.0, floorY, -34); // inativo por agora
     SPAWN_FOXY.set(  -9.0, floorY, -26); // inativo por agora
 
