@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { tocar, parar, estaATocando } from './audio.js';
+import { mostrarPausa, esconderPausa, estaPausado, configurarCallbacks } from './opcoes.js';
 
 const loader = new GLTFLoader();
 const clock  = new THREE.Clock();
@@ -51,8 +53,10 @@ let jogoIniciado    = false;
 const alertas       = { freddy: false, bonnie: false, chica: false, foxy: false };
 
 // intro camera (sair do duto para o escritorio)
-let introCamera   = false;
-let introProgress = 0;
+let introCamera             = false;
+let introReady              = false; // so avanca quando o loading acabar
+let introProgress           = 0;
+let _introPassosIniciados   = false;
 const introStart  = new THREE.Vector3();
 const introEnd    = new THREE.Vector3();
 
@@ -71,11 +75,22 @@ export function iniciarJogo(renderer) {
         mouseOffY = rawMY * 0.26;
     });
 
+    configurarCallbacks(
+        () => { /* retomar — esconderPausa já foi chamado pelo botão */ },
+        () => { window.location.reload(); },
+        () => { _mostrarTelaSair(); }
+    );
+
     document.addEventListener('keydown', e => {
+        if (e.code === 'Escape') {
+            tocar('clickBotao');
+            if (estaPausado()) esconderPausa();
+            else if (jogoIniciado) mostrarPausa();
+            return;
+        }
         keys[e.code] = true;
         if (e.code === 'KeyA') targetAngle += Math.PI / 2;
         if (e.code === 'KeyD') targetAngle -= Math.PI / 2;
-        // setas tambem funcionam
         if (e.code === 'ArrowLeft')  targetAngle += Math.PI / 2;
         if (e.code === 'ArrowRight') targetAngle -= Math.PI / 2;
         e.preventDefault();
@@ -158,19 +173,27 @@ export function iniciarJogo(renderer) {
             luzesFlicker.push({ luz, fase: Math.random() * Math.PI * 2, estragada });
         });
 
-        // fade mais lento (1.2s) e só remove após a transição terminar
+        // pre-posicionar camara logo ao carregar — nao ha flash antes do intro
+        introStart.set(playerPos.x, playerPos.y + EYE_HEIGHT * 0.6, playerPos.z + 0.8);
+        introEnd.set(  playerPos.x, playerPos.y + EYE_HEIGHT, playerPos.z);
+        camaraJogo.position.copy(introStart);
+        introCamera   = true;
+        introReady    = false; // animacao bloqueada ate o loading acabar
+        introProgress = 0;
+
         loadDiv.style.transition = 'opacity 1.2s ease';
         loadDiv.style.opacity = '0';
         setTimeout(() => {
             loadDiv.remove();
             const ov = document.getElementById('fnaf-overlay');
             if (ov) { ov.style.transition = 'none'; ov.style.opacity = '0'; }
-            introStart.set(playerPos.x, playerPos.y + EYE_HEIGHT * 0.6, playerPos.z + 0.8);
-            introEnd.set(  playerPos.x, playerPos.y + EYE_HEIGHT, playerPos.z);
-            introCamera   = true;
-            introProgress = 0;
-            acordando        = true;
-            acordarProgresso = 0;
+            // agora arranca o intro e o acordar
+            introReady              = true;
+            _introPassosIniciados   = false;
+            acordando               = true;
+            acordarProgresso        = 0;
+            tocar('passosDuto');
+            setTimeout(() => parar('passosDuto'), 1600);
         }, 1400);
     },
     xhr => {
@@ -230,17 +253,25 @@ export function iniciarJogo(renderer) {
 
         // animacao de entrada — curta e suave (1.5s)
         if (introCamera) {
-            introProgress = Math.min(1, introProgress + delta / 1.5);
+            if (introReady) introProgress = Math.min(1, introProgress + delta / 1.5);
             const ease = 1 - Math.pow(1 - introProgress, 2);
             camaraJogo.position.lerpVectors(introStart, introEnd, ease);
-            // olha para o desk/computador durante toda a animacao
-            // olha para o computador (sul, -Z) durante a animacao
             camaraJogo.lookAt(playerPos.x, playerPos.y + EYE_HEIGHT, playerPos.z - 6);
-            if (introProgress >= 1) introCamera = false;
+            // aponta lanterna para a frente durante o intro
+            if (luzAlvo) {
+                const _d = new THREE.Vector3();
+                camaraJogo.getWorldDirection(_d);
+                luzAlvo.position.copy(camaraJogo.position).addScaledVector(_d, 8);
+            }
+            if (introProgress > 0.45 && !_introPassosIniciados) {
+                _introPassosIniciados = true;
+                tocar('passosJogo');
+            }
+            if (introProgress >= 1) {
+                introCamera = false;
+                parar('passosJogo');
+            }
         }
-
-        // mixers das animacoes dos personagens
-        inimigos.forEach(ini => { if (ini.mixer) ini.mixer.update(delta); });
 
         // gestao do jogo — so depois do accordar e intro
         if (!acordando && !introCamera) {
@@ -256,10 +287,23 @@ export function iniciarJogo(renderer) {
             //if (tokensApanhados >= TOKENS_FOXY && !alertas.foxy) ativarInimigo('foxy');
         }
 
-        atualizarMovimento(delta);
+        if (!estaPausado()) {
+            // mixers das animacoes — cancela root motion via root bones
+            inimigos.forEach(ini => {
+                if (!ini.mixer) return;
+                const { x, y, z } = ini.modelo.position;
+                ini.mixer.update(delta);
+                ini.modelo.position.set(x, y, z);
+                ini.rootBones?.forEach((b, i) => {
+                    const ip = ini.rootBonesInitPos?.[i];
+                    if (ip) { b.position.x = ip.x; b.position.z = ip.z; }
+                });
+            });
+            atualizarMovimento(delta);
+            atualizarInimigos(delta);
+        }
         atualizarCamera();
         atualizarTokens();
-        atualizarInimigos(delta);
         atualizarMinimapa();
 
         renderer.render(cenaJogo, camaraJogo);
@@ -303,14 +347,20 @@ function atualizarMovimento(delta) {
     while (da < -Math.PI) da += Math.PI * 2;
     playerAngle += da * Math.min(1, delta * 6);
 
-    const dir = new THREE.Vector3(Math.sin(playerAngle), 0, Math.cos(playerAngle));
-    if (keys['KeyW'] || keys['ArrowUp']) tentarMover(dir, MOVE_SPEED * delta);
+    const dir    = new THREE.Vector3(Math.sin(playerAngle), 0, Math.cos(playerAngle));
+    const aAndar = keys['KeyW'] || keys['ArrowUp'];
+    if (aAndar) tentarMover(dir, MOVE_SPEED * delta);
+
+    // passos só quando se anda
+    if (aAndar && !estaATocando('passosJogo')) tocar('passosJogo');
+    if (!aAndar && estaATocando('passosJogo')) parar('passosJogo');
 
     tokens = tokens.filter(t => {
         const wp = t.userData.worldPos;
         if (Math.hypot(playerPos.x - wp.x, playerPos.z - wp.z) < 1.4) {
             cenaJogo.remove(t);
             tokensApanhados++;
+            tocar('token');
             return false;
         }
         return true;
@@ -624,7 +674,8 @@ function atualizarMinimapa() {
         ctxMapa.fillStyle = '#ffffff';
         ctxMapa.font = 'bold 7px monospace';
         ctxMapa.textAlign = 'center';
-        ctxMapa.fillText(ini.nome[0].toUpperCase(), ex, ey + 2.5);
+        const label = ini.nome === 'foxy' ? 'X' : ini.nome[0].toUpperCase();
+        ctxMapa.fillText(label, ex, ey + 2.5);
     });
 
     ctxMapa.restore();
@@ -641,6 +692,40 @@ function atualizarMinimapa() {
     ctxMapa.fillStyle = '#ff88ff';
     ctxMapa.font = 'bold 11px monospace';
     ctxMapa.fillText(`${tokensApanhados} / ${totalTokens}`, 6, H-6);
+}
+
+function _mostrarTelaSair() {
+    const fade = document.createElement('div');
+    Object.assign(fade.style, {
+        position: 'fixed', inset: '0', zIndex: '900',
+        background: '#000', opacity: '0',
+        transition: 'opacity 1.4s ease', pointerEvents: 'auto'
+    });
+    document.body.appendChild(fade);
+    requestAnimationFrame(() => { fade.style.opacity = '1'; });
+
+    const msg = document.createElement('div');
+    Object.assign(msg.style, {
+        position: 'fixed', inset: '0', zIndex: '901',
+        display: 'flex', flexDirection: 'column',
+        alignItems: 'center', justifyContent: 'center',
+        fontFamily: "'Courier New', monospace",
+        color: '#cc1010', opacity: '0',
+        transition: 'opacity 0.9s ease',
+        pointerEvents: 'none', textAlign: 'center', gap: '18px'
+    });
+    msg.innerHTML = `
+        <div style="font-size:clamp(0.85em,1.4vw,1em);letter-spacing:8px;color:#661010">FREDDY FAZBEAR'S PIZZA</div>
+        <div style="font-size:clamp(1.6em,3vw,2.4em);letter-spacing:10px;text-shadow:0 0 18px #cc0000,0 0 40px #660000">THANK YOU FOR PLAYING</div>
+        <div style="font-size:clamp(0.75em,1.2vw,0.9em);letter-spacing:5px;color:#772222;margin-top:6px">HOPE TO SEE YOU AGAIN...</div>
+    `;
+    document.body.appendChild(msg);
+
+    setTimeout(() => { msg.style.opacity = '1'; }, 700);
+    setTimeout(() => {
+        window.close();
+        msg.innerHTML += `<div style="font-size:clamp(0.65em,1vw,0.78em);letter-spacing:4px;color:#441111;margin-top:20px">[ podes fechar esta janela ]</div>`;
+    }, 3000);
 }
 
 function jogoOver(nomeInimigo) {
@@ -751,14 +836,14 @@ function calcMinY(model) {
 }
 
 function carregarPersonagens(floorY) {
-    SPAWN_FREDDY.set(-9.0, floorY + 3.5, -28);
-    SPAWN_BONNIE.set(-7.0, floorY + 1.2, -25);
-    SPAWN_CHICA.set(  4.0, floorY, -34); // inativo por agora
-    SPAWN_FOXY.set(  -9.0, floorY, -26); // inativo por agora
+    SPAWN_FREDDY.set(-7.0, floorY + 3.5, -21);
+    SPAWN_BONNIE.set(-3.0, floorY + 1.2, -14);
+    SPAWN_CHICA.set( -4.0, floorY + 1.0, -8);
+    SPAWN_FOXY.set(  -3.0, floorY + 1.0, -20);
 
-    const ESC = { freddy: 2.6, bonnie: 2.65, chica: 0.018, foxy: 0.003 };
+    const ESC = { freddy: 2.6, bonnie: 2.65, chica: 0.035, foxy: 2.2 };
 
-    function loadChar(path, spawn, rotY, velocidade, escala, nome, clipNome) {
+    function loadChar(path, spawn, rotY, velocidade, escala, nome, clipNome, timeScale = 1.0) {
         loader.load(path, gltf => {
             const modelo = gltf.scene;
             modelo.scale.setScalar(escala);
@@ -769,9 +854,10 @@ function carregarPersonagens(floorY) {
             console.log(`[${nome}] posicao final:`, modelo.position.x.toFixed(1), modelo.position.y.toFixed(1), modelo.position.z.toFixed(1), '| bb height:', new THREE.Box3().setFromObject(modelo).getSize(new THREE.Vector3()).y.toFixed(2));
             modelo.rotation.y = rotY;
 
-            // emissive em TODOS os meshes (nao so SkinnedMesh) para visibilidade
+            // emissive + desativar frustum culling (evita que bones animados escondam o modelo)
             modelo.traverse(o => {
                 if (!o.isMesh && !o.isSkinnedMesh) return;
+                o.frustumCulled = false;
                 const mats = Array.isArray(o.material) ? o.material : [o.material];
                 mats.forEach(m => {
                     if (m.emissive) { m.emissive.set(0x0d0808); m.emissiveIntensity = 0.35; }
@@ -779,7 +865,7 @@ function carregarPersonagens(floorY) {
                 });
             });
 
-            // remove scale tracks — evitam deformacoes de proporcoes
+            // remove scale tracks
             gltf.animations.forEach(clip => {
                 clip.tracks = clip.tracks.filter(t => !t.name.endsWith('.scale'));
             });
@@ -790,9 +876,10 @@ function carregarPersonagens(floorY) {
             const mixer = new THREE.AnimationMixer(modelo);
             let clipIdle = null, clipAndar = null, clipJumpscare = null;
 
-            // tenta encontrar o clip especifico pedido
+            // tenta encontrar o clip especifico pedido — match exato primeiro, depois substring
             let clipEspecifico = clipNome
-                ? gltf.animations.find(c => c.name.toLowerCase().includes(clipNome.toLowerCase()))
+                ? gltf.animations.find(c => c.name.toLowerCase() === clipNome.toLowerCase()) ||
+                  gltf.animations.find(c => c.name.toLowerCase().includes(clipNome.toLowerCase()))
                 : null;
 
             gltf.animations.forEach(c => {
@@ -806,27 +893,37 @@ function carregarPersonagens(floorY) {
             // usa clip especifico se existir, senao fallback
             const clipParaTocar = clipEspecifico || clipIdle;
             console.log(`[${nome}] clip escolhido: ${clipParaTocar?.name ?? 'NENHUM'}`);
+
+            // encontrar root bones (filhos directos do scene, nao de outro bone)
+            const rootBones = [];
+            modelo.traverse(o => {
+                if (o.isBone && o.parent && !o.parent.isBone) rootBones.push(o);
+            });
+            // guarda posicao bind-pose dos root bones ANTES de qualquer animacao
+            const rootBonesInitPos = rootBones.map(b => b.position.clone());
+
             let acaoAtual = null;
             if (clipParaTocar) {
                 acaoAtual = mixer.clipAction(clipParaTocar);
+                acaoAtual.timeScale = timeScale;
                 acaoAtual.play();
                 mixer.update(0.1); // avanca mais para sair da bind pose
             }
 
             inimigos.push({
-                nome, modelo, mixer,
+                nome, modelo, mixer, rootBones, rootBonesInitPos,
                 clipIdle, clipAndar, clipJumpscare, acaoAtual,
                 spawnPos: spawn.clone(), velocidade,
                 ativo: false, congelado: false,
-                posicionado: false  // snap para chaopaandar na 1ª frame
+                posicionado: false
             });
         }, undefined, err => console.error('Erro ao carregar', nome, err));
     }
 
     loadChar('./Models/Personagens/rotten_freddy.glb', SPAWN_FREDDY,  0,    1.8, ESC.freddy, 'freddy', 'RottenFreddy-Idle');
     loadChar('./Models/Personagens/bonnie.glb',        SPAWN_BONNIE,  0.25, 2.0, ESC.bonnie, 'bonnie', 'walk');
-    loadChar('./Models/Personagens/chica.glb',         SPAWN_CHICA,   0,    1.9, ESC.chica,  'chica',  'Trans_DiningArea_A');
-    loadChar('./Models/Personagens/foxy.glb',          SPAWN_FOXY,    Math.PI/2, 3.0, ESC.foxy, 'foxy', 'Run');
+    loadChar('./Models/Personagens/chica.glb',         SPAWN_CHICA,   0,    1.9, ESC.chica,  'chica',  'walk',   0.7);
+    loadChar('./Models/Personagens/foxy.glb',          SPAWN_FOXY,    Math.PI/2, 3.0, ESC.foxy, 'foxy', 'Foxy--Charge', 0.3);
 }
 
 // ─── AI DOS INIMIGOS ───────────────────────────────────────────────

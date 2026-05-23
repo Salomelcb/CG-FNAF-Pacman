@@ -4,6 +4,8 @@ import { criarMenuNeon } from './menu.js';
 import { criarTelaDificuldade } from './dificuldade.js';
 import { criarObjetosComplexos } from './objetos.js';
 import { iniciarJogo } from './jogo.js';
+import { tocar, parar } from './audio.js';
+import { criarPaineis, mostrarOpcoes, estaOverlayAberto } from './opcoes.js';
 
 let cena, camara, renderer, lanterna, alvoLanterna;
 let raycaster = new THREE.Raycaster();
@@ -21,6 +23,12 @@ let progressoEntrada = 0;
 let progressoSaida   = 0;
 let tempoAnterior = null;
 let fadeOverlay = null;
+
+// áudio
+let _audioIniciado       = false;
+let _passosJogoIniciados = false;
+let _passosDutoIniciados = false;
+let _prevHoveredBtn      = null;
 
 let btnStart, btnOptions, btnExit;
 let botoesClicaveis = [];
@@ -171,6 +179,7 @@ function Start() {
     inspecaoOverlay = document.getElementById('inspecao-overlay');
     inspecaoTitulo  = document.getElementById('inspecao-titulo');
 
+    criarPaineis();
     initInspRenderer();
 
     const dif        = criarTelaDificuldade((_nivel) => {
@@ -178,6 +187,7 @@ function Start() {
         loopAtivo = false;
         fadeOverlay.style.transition = 'none';
         fadeOverlay.style.opacity    = '0';
+        parar('menuTema');
         iniciarJogo(renderer);
     });
     telaDificuldade  = dif.telaDificuldade;
@@ -186,6 +196,13 @@ function Start() {
     window.addEventListener('resize',    onWindowResize);
     window.addEventListener('mousemove', onMouseMove);
     window.addEventListener('click',     onClick);
+
+    // inicia áudio quando o utilizador fecha o splash (garante autoplay desbloqueado)
+    window.addEventListener('splash-dismissed', _onPrimeiraInteracao, { once: true });
+    // fallback: qualquer outra interação também desbloqueia
+    ['mousedown', 'keydown', 'touchstart'].forEach(ev =>
+        document.addEventListener(ev, _onPrimeiraInteracao));
+
     loop();
 }
 
@@ -217,6 +234,8 @@ function onMouseMove(event) {
         }
     }
 
+    _prevHoveredBtn = hoveredBtn;
+
     if (estadoAtual === 'menu') {
         const alvos = [];
         if (objetosCena.cupcake) alvos.push(objetosCena.cupcake.grupo);
@@ -226,7 +245,22 @@ function onMouseMove(event) {
     }
 }
 
+function _iniciarAudio() {
+    if (_audioIniciado) return;
+    _audioIniciado = true;
+    tocar('coracao');
+    tocar('luzFlicker');
+    tocar('menuTema');
+}
+
+function _onPrimeiraInteracao() {
+    _iniciarAudio();
+    ['mousedown', 'keydown', 'touchstart'].forEach(ev =>
+        document.removeEventListener(ev, _onPrimeiraInteracao));
+}
+
 function onClick(event) {
+    if (estaOverlayAberto()) return;
     if (emInspecao) return;
     mouse.x =  (event.clientX / window.innerWidth)  * 2 - 1;
     mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
@@ -246,9 +280,9 @@ function onClick(event) {
     const intersects = raycaster.intersectObjects(botoesClicaveis, true);
     if (intersects.length > 0) {
         const obj = intersects[0].object;
-        if (obj === btnStart)   iniciarEntradaDuto();
-        if (obj === btnOptions) console.log('OPÇÕES');
-        if (obj === btnExit)    sairJogo();
+        if (obj === btnStart)   { tocar('clickBotao'); iniciarEntradaDuto(); }
+        if (obj === btnOptions) { tocar('clickBotao'); mostrarOpcoes(); }
+        if (obj === btnExit)    { tocar('clickBotao'); sairJogo(); }
     }
 }
 
@@ -451,7 +485,7 @@ function loop() {
 
         if (progressoSaida >= 1) {
             loopAtivo = false;
-            // overlay fica a preto — jogo.js vai retira-lo depois de carregar
+            parar('menuTema');
             iniciarJogo(renderer);
         }
 
@@ -472,6 +506,18 @@ function loop() {
 
         if (progressoEntrada > 0.55)
             fadeOverlay.style.opacity = ((progressoEntrada - 0.55) / 0.45).toFixed(3);
+
+        // passos normais no início/meio da animação
+        if (!_passosJogoIniciados && progressoEntrada > 0.02) {
+            _passosJogoIniciados = true;
+            tocar('passosJogo');
+        }
+        // passos de duto no final (quando já não se vê nada)
+        if (!_passosDutoIniciados && progressoEntrada > 0.72) {
+            _passosDutoIniciados = true;
+            parar('passosJogo');
+            tocar('passosDuto');
+        }
 
         if (progressoEntrada >= 1) {
             estadoAtual = 'dificuldade';
@@ -551,4 +597,6 @@ function iniciarEntradaDuto() {
     estadoAtual = 'entrar_duto';
     progressoEntrada = 0;
     botoesClicaveis.forEach(b => { b.userData.clicavel = false; });
+    _passosJogoIniciados = false;
+    _passosDutoIniciados = false;
 }

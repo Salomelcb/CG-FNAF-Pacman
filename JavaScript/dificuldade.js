@@ -1,3 +1,5 @@
+import { tocar, parar } from './audio.js';
+
 let _ruidoAnimId = null;
 
 export function criarTelaDificuldade(onSelecionada) {
@@ -161,9 +163,17 @@ export function criarTelaDificuldade(onSelecionada) {
     `;
     document.body.appendChild(telaDificuldade);
 
-    document.getElementById('btnFacil').addEventListener('click',  () => selecionarDificuldade('facil',   onSelecionada));
-    document.getElementById('btnNormal').addEventListener('click', () => selecionarDificuldade('normal',  onSelecionada));
-    document.getElementById('btnDificil').addEventListener('click',() => selecionarDificuldade('dificil', onSelecionada));
+    const btnsFacil   = document.getElementById('btnFacil');
+    const btnsNormal  = document.getElementById('btnNormal');
+    const btnsDificil = document.getElementById('btnDificil');
+
+    [btnsFacil, btnsNormal, btnsDificil].forEach(btn => {
+        btn.addEventListener('click', () => tocar('clickDificuldade'));
+    });
+
+    btnsFacil.addEventListener('click',   () => selecionarDificuldade('facil',   onSelecionada));
+    btnsNormal.addEventListener('click',  () => selecionarDificuldade('normal',  onSelecionada));
+    btnsDificil.addEventListener('click', () => selecionarDificuldade('dificil', onSelecionada));
 
     return { telaDificuldade, iniciarRuidoDuto };
 }
@@ -189,7 +199,8 @@ function iniciarRuidoDuto() {
 
 function selecionarDificuldade(nivel, onSelecionada) {
     if (_ruidoAnimId) { cancelAnimationFrame(_ruidoAnimId); _ruidoAnimId = null; }
-    // esconde imediatamente — loading screen do jogo trata do visual
+    parar('passosJogo');
+    parar('passosDuto');
     document.getElementById('telaDificuldade').style.display = 'none';
     if (onSelecionada) onSelecionada(nivel);
 }

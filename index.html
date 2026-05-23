@@ -51,6 +51,102 @@
 
     <script type="module" src="./JavaScript/appThree.js"></script>
 
+    <!-- Tela de imersão inicial — aparece enquanto o menu carrega -->
+    <div id="splash-screen" style="
+        position: fixed; inset: 0; z-index: 1000;
+        background: #000;
+        display: flex; flex-direction: column;
+        align-items: center; justify-content: center;
+        cursor: pointer;
+        transition: opacity 0.9s ease;
+        font-family: 'Courier New', monospace;
+        gap: 32px;
+    ">
+        <!-- ruído de fundo -->
+        <canvas id="splash-noise" style="
+            position: absolute; inset: 0; width: 100%; height: 100%;
+            opacity: 0.045; pointer-events: none; image-rendering: pixelated;
+        "></canvas>
+
+        <!-- scanlines -->
+        <div style="
+            position: absolute; inset: 0; pointer-events: none;
+            background: repeating-linear-gradient(
+                0deg, transparent, transparent 3px,
+                rgba(0,0,0,0.12) 3px, rgba(0,0,0,0.12) 4px);
+        "></div>
+
+        <!-- conteúdo -->
+        <div style="position: relative; text-align: center; z-index: 1;">
+            <div style="
+                font-size: clamp(0.7em,1.3vw,0.95em);
+                color: #661010; letter-spacing: 8px;
+                margin-bottom: 18px; text-transform: uppercase;
+            ">FREDDY FAZBEAR'S PIZZA</div>
+
+            <div id="splash-titulo" style="
+                font-size: clamp(2em,5vw,3.8em);
+                color: #cc0000; letter-spacing: 14px;
+                text-shadow: 0 0 18px #aa0000, 0 0 50px #550000;
+                animation: splashPisca 4s infinite;
+            ">FNAF PACMAN</div>
+
+            <div style="
+                font-size: clamp(0.55em,1vw,0.75em);
+                color: #441111; letter-spacing: 5px;
+                margin-top: 14px; text-transform: uppercase;
+            ">Five Nights at Freddy's</div>
+        </div>
+
+        <div id="splash-cta" style="
+            position: relative; z-index: 1;
+            font-size: clamp(0.65em,1.1vw,0.82em);
+            color: #882222; letter-spacing: 6px;
+            text-transform: uppercase;
+            animation: splashBlink 1.4s ease infinite;
+        ">CLICA PARA CONTINUAR</div>
+    </div>
+
+    <style>
+        @keyframes splashPisca {
+            0%,88%,100% { opacity:1; }
+            90% { opacity:0.04; } 91% { opacity:0.9; }
+            93% { opacity:0.06; } 94% { opacity:1; }
+        }
+        @keyframes splashBlink {
+            0%,100% { opacity:1; } 50% { opacity:0.15; }
+        }
+    </style>
+
+    <script>
+        // ruído animado no splash
+        (function() {
+            const cv = document.getElementById('splash-noise');
+            if (!cv) return;
+            cv.width = 200; cv.height = 150;
+            const ctx = cv.getContext('2d');
+            function frame() {
+                if (!document.getElementById('splash-screen')) return;
+                const img = ctx.createImageData(200, 150);
+                for (let i = 0; i < img.data.length; i += 4) {
+                    const v = Math.random() * 255 | 0;
+                    img.data[i] = img.data[i+1] = img.data[i+2] = v;
+                    img.data[i+3] = 255;
+                }
+                ctx.putImageData(img, 0, 0);
+                requestAnimationFrame(frame);
+            }
+            frame();
+
+            document.getElementById('splash-screen').addEventListener('click', function() {
+                this.style.opacity = '0';
+                setTimeout(() => this.remove(), 950);
+                // sinaliza ao appThree que o utilizador já interagiu
+                window.dispatchEvent(new Event('splash-dismissed'));
+            }, { once: true });
+        })();
+    </script>
+
     <!-- overlay de inspeção do objeto -->
     <div id="inspecao-overlay" style="
         display: none;
