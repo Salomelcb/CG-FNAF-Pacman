@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { tocar, parar, estaATocando } from './audio.js';
+import { tocar, parar, estaATocando, setCoracaoFactor, atualizarPhoneguyDistancia } from './audio.js';
 import { mostrarPausa, esconderPausa, estaPausado, configurarCallbacks } from './opcoes.js';
 
 const loader = new GLTFLoader();
@@ -47,7 +47,9 @@ const SPAWN_CHICA  = new THREE.Vector3( 4.0, 0, -36);
 const SPAWN_FOXY   = new THREE.Vector3(-9.0, 0, -26);
 
 // ─── ESTADO DO JOGO ────────────────────────────────────────────────
-const TOKENS_FOXY   = 10; // tokens para o Foxy sair da cove
+const TOKENS_FOXY   = 10;
+let mensagemInicioAtiva = false;
+const OFFICE_XZ = new THREE.Vector2(0, 2); // posicao XZ do escritorio (spawn do jogador) // tokens para o Foxy sair da cove
 let tempoJogo       = 0;
 let jogoIniciado    = false;
 const alertas       = { freddy: false, bonnie: false, chica: false, foxy: false };
@@ -83,9 +85,10 @@ export function iniciarJogo(renderer) {
 
     document.addEventListener('keydown', e => {
         if (e.code === 'Escape') {
-            tocar('clickBotao');
-            if (estaPausado()) esconderPausa();
-            else if (jogoIniciado) mostrarPausa();
+            if (!estaPausado() && jogoIniciado) {
+                tocar('clickBotao');
+                mostrarPausa();
+            }
             return;
         }
         keys[e.code] = true;
@@ -265,11 +268,11 @@ export function iniciarJogo(renderer) {
             }
             if (introProgress > 0.45 && !_introPassosIniciados) {
                 _introPassosIniciados = true;
-                tocar('passosJogo');
+                tocar('passosHeavy');
             }
             if (introProgress >= 1) {
                 introCamera = false;
-                parar('passosJogo');
+                parar('passosHeavy');
             }
         }
 
@@ -288,12 +291,22 @@ export function iniciarJogo(renderer) {
         }
 
         if (!estaPausado()) {
-            // mixers das animacoes — cancela root motion via root bones
+            // mixers das animacoes — cancela root motion a todos os niveis
             inimigos.forEach(ini => {
                 if (!ini.mixer) return;
-                const { x, y, z } = ini.modelo.position;
+                const { x, z } = ini.modelo.position;
                 ini.mixer.update(delta);
-                ini.modelo.position.set(x, y, z);
+                // cancela deslocamento horizontal do modelo
+                ini.modelo.position.x = x;
+                ini.modelo.position.z = z;
+                // força Y ao spawnY (nunca afunda no chão)
+                if (ini.spawnY !== undefined) ini.modelo.position.y = ini.spawnY;
+                // cancela X/Z nos grupos de armature (causa principal de teletransporte)
+                ini.armatureGrupos?.forEach(({ obj, initPos }) => {
+                    obj.position.x = initPos.x;
+                    obj.position.z = initPos.z;
+                });
+                // cancela X/Z nos root bones
                 ini.rootBones?.forEach((b, i) => {
                     const ip = ini.rootBonesInitPos?.[i];
                     if (ip) { b.position.x = ip.x; b.position.z = ip.z; }
@@ -301,6 +314,8 @@ export function iniciarJogo(renderer) {
             });
             atualizarMovimento(delta);
             atualizarInimigos(delta);
+            atualizarCoracaoProximidade();
+            atualizarPhoneguyDistancia(Math.hypot(playerPos.x - OFFICE_XZ.x, playerPos.z - OFFICE_XZ.y));
         }
         atualizarCamera();
         atualizarTokens();
@@ -341,7 +356,7 @@ function tentarMover(dir, step) {
 }
 
 function atualizarMovimento(delta) {
-    if (introCamera) return;
+    if (introCamera || acordando || mensagemInicioAtiva) return;
     let da = targetAngle - playerAngle;
     while (da >  Math.PI) da -= Math.PI * 2;
     while (da < -Math.PI) da += Math.PI * 2;
@@ -352,8 +367,8 @@ function atualizarMovimento(delta) {
     if (aAndar) tentarMover(dir, MOVE_SPEED * delta);
 
     // passos só quando se anda
-    if (aAndar && !estaATocando('passosJogo')) tocar('passosJogo');
-    if (!aAndar && estaATocando('passosJogo')) parar('passosJogo');
+    if (aAndar && !estaATocando('passosHeavy')) tocar('passosHeavy');
+    if (!aAndar && estaATocando('passosHeavy')) parar('passosHeavy');
 
     tokens = tokens.filter(t => {
         const wp = t.userData.worldPos;
@@ -368,7 +383,7 @@ function atualizarMovimento(delta) {
 }
 
 function atualizarCamera() {
-    if (introCamera) return;
+    if (introCamera || acordando || mensagemInicioAtiva) return;
     camaraJogo.position.set(playerPos.x, playerPos.y + EYE_HEIGHT, playerPos.z);
 
     smoothX += (mouseOffX - smoothX) * 0.10;
@@ -665,10 +680,16 @@ function atualizarMinimapa() {
     });
 
     // inimigos — ponto vermelho + letra inicial
+    // chica: mesh tem offset geometrico em X e Z vs origem do modelo — compensar no minimap
+    const _chicaOff = spawnPalco ? (spawnPalco.bb.max.x - spawnPalco.bb.min.x) * 0.20 : 1.7;
     inimigos.forEach(ini => {
         const ip = ini.modelo.position;
-        const ex = (ip.x - playerPos.x) * S;
-        const ey = (ip.z - playerPos.z) * S;
+        const vizX = ini.nome === 'chica' ? ip.x - _chicaOff : ip.x;
+        const vizZ = ini.nome === 'chica' ? ip.z + 5.0
+                   : ini.nome === 'foxy'  ? ip.z - 2.0
+                   : ip.z;
+        const ex = (vizX - playerPos.x) * S;
+        const ey = (vizZ - playerPos.z) * S;
         ctxMapa.fillStyle = '#ff2222';
         ctxMapa.beginPath(); ctxMapa.arc(ex, ey, 5, 0, Math.PI*2); ctxMapa.fill();
         ctxMapa.fillStyle = '#ffffff';
@@ -741,16 +762,21 @@ function jogoOver(nomeInimigo) {
         background: 'rgba(0,0,0,0)',
         fontFamily: "'Courier New', monospace",
         color: '#ff2222', textAlign: 'center',
-        transition: 'background 0.4s ease', pointerEvents: 'none'
+        transition: 'background 1.2s ease', pointerEvents: 'none'
     });
     el.innerHTML = `
         <div style="font-size:clamp(2em,5vw,3.5em);letter-spacing:10px;
-             text-shadow:0 0 30px #ff0000">GAME OVER</div>
+             text-shadow:0 0 30px #ff0000;opacity:0;transition:opacity 0.8s ease 1s">GAME OVER</div>
         <div style="font-size:clamp(0.8em,1.4vw,1em);letter-spacing:4px;
-             color:#888;margin-top:18px">apanhado pelo ${nomeInimigo.toUpperCase()}</div>
+             color:#888;margin-top:18px;opacity:0;transition:opacity 0.8s ease 1.3s">apanhado pelo ${nomeInimigo.toUpperCase()}</div>
     `;
     document.body.appendChild(el);
-    requestAnimationFrame(() => { el.style.background = 'rgba(0,0,0,0.88)'; });
+    requestAnimationFrame(() => {
+        el.style.background = 'rgba(0,0,0,1)';
+        setTimeout(() => {
+            el.querySelectorAll('div').forEach(d => { d.style.opacity = '1'; });
+        }, 100);
+    });
 }
 
 function criarHUD() {
@@ -774,15 +800,22 @@ function criarHUD() {
     });
     document.body.appendChild(coords);
 
-    // atualiza coords a cada frame
+    // atualiza coords a cada frame (jogador + posição dos inimigos para debug)
     setInterval(() => {
-        coords.textContent = `X:${playerPos.x.toFixed(1)}  Z:${playerPos.z.toFixed(1)}`;
-    }, 100);
+        let txt = `Jogador  X:${playerPos.x.toFixed(1)}  Z:${playerPos.z.toFixed(1)}`;
+        inimigos.forEach(ini => {
+            const p = ini.modelo.position;
+            txt += `\n${ini.nome.padEnd(7)}  X:${p.x.toFixed(1)}  Y:${p.y.toFixed(1)}  Z:${p.z.toFixed(1)}`;
+        });
+        coords.textContent = txt;
+        coords.style.whiteSpace = 'pre';
+    }, 200);
 }
 
 // ─── SPAWN ZONES ──────────────────────────────────────────────────
 let spawnPalco = null; // bb do plano do palco (Freddy/Bonnie/Chica)
 let spawnCova  = null; // bb do circulo do Foxy
+let _floorY    = 0;   // Y do chão, guardado após carregar o mapa
 
 function carregarSpawnZones(floorY) {
     loader.load('./Models/spawnAnimatronics.glb', gltf => {
@@ -836,14 +869,42 @@ function calcMinY(model) {
 }
 
 function carregarPersonagens(floorY) {
-    SPAWN_FREDDY.set(-7.0, floorY + 3.5, -21);
-    SPAWN_BONNIE.set(-3.0, floorY + 1.2, -14);
-    SPAWN_CHICA.set( -4.0, floorY + 1.0, -8);
-    SPAWN_FOXY.set(  -3.0, floorY + 1.0, -20);
+    _floorY = floorY;
 
-    const ESC = { freddy: 2.6, bonnie: 2.65, chica: 0.035, foxy: 2.2 };
+    // posicionar no plane/circle do spawnAnimatronics.glb
+    if (spawnPalco) {
+        const cx   = spawnPalco.centro.x;
+        const cz   = spawnPalco.centro.z;
+        const topY = spawnPalco.bb.max.y;
+        const off  = (spawnPalco.bb.max.x - spawnPalco.bb.min.x) * 0.20;
+        SPAWN_FREDDY.set(cx,       topY + 1.95, cz + 4.5);
+        // bonnie: idle tem root bone mais atras e mais em baixo vs walk — compensa aqui
+        SPAWN_BONNIE.set(cx - off, topY + 2.0,  cz + 3.5);
+        // chica: mesh tem offset geometrico X (~off) e Z (~+5.5) em world units — compensar no spawn
+        SPAWN_CHICA.set( cx + off * 2.0, topY + 0.0, cz - 1.1);
 
-    function loadChar(path, spawn, rotY, velocidade, escala, nome, clipNome, timeScale = 1.0) {
+        // foxy na Pirate Cove — cova abre para corredor (+Z), interior fica em -Z
+        if (spawnCova) {
+            // foxy dentro da cova (interior em +Z): spawn +2 do centro
+            SPAWN_FOXY.set(spawnCova.centro.x, spawnCova.bb.max.y + 1.95, spawnCova.centro.z + 2.0);
+        } else {
+            SPAWN_FOXY.set(cx + off * 2, topY + 1.95, cz + 3.5);
+        }
+
+        // luz suave para iluminar BasicMaterial (Bonnie) sem lavar texturas
+        const luzPalco = new THREE.PointLight(0xfff5ee, 2, 35);
+        luzPalco.position.set(cx, topY + 8, cz);
+        cenaJogo.add(luzPalco);
+    } else {
+        SPAWN_FREDDY.set( 0.0, floorY + 0.2, -39);
+        SPAWN_BONNIE.set(-2.5, floorY + 0.2, -39);
+        SPAWN_CHICA.set(  2.5, floorY + 0.0, -39);
+        SPAWN_FOXY.set(   5.0, floorY + 0.2, -39);
+    }
+
+    const ESC = { freddy: 1.15, bonnie: 2.65, chica: 0.035, foxy: 1.15 };
+
+    function loadChar(path, spawn, rotY, velocidade, escala, nome, clipNome, timeScale = 1.0, walkYOffset = 0) {
         loader.load(path, gltf => {
             const modelo = gltf.scene;
             modelo.scale.setScalar(escala);
@@ -860,7 +921,7 @@ function carregarPersonagens(floorY) {
                 o.frustumCulled = false;
                 const mats = Array.isArray(o.material) ? o.material : [o.material];
                 mats.forEach(m => {
-                    if (m.emissive) { m.emissive.set(0x0d0808); m.emissiveIntensity = 0.35; }
+                    if (m.emissive) { m.emissive.set(0x0f0c0c); m.emissiveIntensity = 0.5; }
                     m.needsUpdate = true;
                 });
             });
@@ -902,6 +963,15 @@ function carregarPersonagens(floorY) {
             // guarda posicao bind-pose dos root bones ANTES de qualquer animacao
             const rootBonesInitPos = rootBones.map(b => b.position.clone());
 
+            // guarda posicao inicial dos grupos de armature (filhos nao-bone do modelo)
+            // estes grupos podem ter root motion e causar teletransporte se nao forem cancelados
+            const armatureGrupos = [];
+            modelo.children.forEach(child => {
+                if (!child.isBone && !child.isMesh && !child.isSkinnedMesh) {
+                    armatureGrupos.push({ obj: child, initPos: child.position.clone() });
+                }
+            });
+
             let acaoAtual = null;
             if (clipParaTocar) {
                 acaoAtual = mixer.clipAction(clipParaTocar);
@@ -910,32 +980,27 @@ function carregarPersonagens(floorY) {
                 mixer.update(0.1); // avanca mais para sair da bind pose
             }
 
+            const angInicial = Math.random() * Math.PI * 2;
             inimigos.push({
                 nome, modelo, mixer, rootBones, rootBonesInitPos,
+                armatureGrupos,
                 clipIdle, clipAndar, clipJumpscare, acaoAtual,
-                spawnPos: spawn.clone(), velocidade,
-                ativo: false, congelado: false,
-                posicionado: false
+                spawnPos: spawn.clone(), spawnY: spawn.y, walkYOffset,
+                velocidade,
+                ativo: false, congelado: false, posicionado: false,
+                dirAtual: new THREE.Vector3(Math.sin(angInicial), 0, Math.cos(angInicial)),
+                tempoMudanca: Math.random() * 1.5,
             });
         }, undefined, err => console.error('Erro ao carregar', nome, err));
     }
 
-    loadChar('./Models/Personagens/rotten_freddy.glb', SPAWN_FREDDY,  0,    1.8, ESC.freddy, 'freddy', 'RottenFreddy-Idle');
-    loadChar('./Models/Personagens/bonnie.glb',        SPAWN_BONNIE,  0.25, 2.0, ESC.bonnie, 'bonnie', 'walk');
-    loadChar('./Models/Personagens/chica.glb',         SPAWN_CHICA,   0,    1.9, ESC.chica,  'chica',  'walk',   0.7);
-    loadChar('./Models/Personagens/foxy.glb',          SPAWN_FOXY,    Math.PI/2, 3.0, ESC.foxy, 'foxy', 'Foxy--Charge', 0.3);
+    loadChar('./Models/Personagens/freddy_ar.glb', SPAWN_FREDDY,  0,    1.8, ESC.freddy, 'freddy', 'Freddy--Idle',                1.0, 0  );
+    loadChar('./Models/Personagens/bonnie.glb',    SPAWN_BONNIE,  0.25, 2.0, ESC.bonnie, 'bonnie', 'Bonnie--Idle',                1.0, 0  );
+    loadChar('./Models/Personagens/chica.glb',     SPAWN_CHICA,   0,    1.9, ESC.chica,  'chica',  'chica_rings_skeleton|idle',   1.0, 0  );
+    loadChar('./Models/Personagens/foxy_ar.glb',   SPAWN_FOXY,    0,    3.0, ESC.foxy,   'foxy',   'Foxy--Idle',                  1.0, 0  );
 }
 
 // ─── AI DOS INIMIGOS ───────────────────────────────────────────────
-
-function jogadorOlhaParaInimigo(ini) {
-    const dirParaIni = new THREE.Vector3()
-        .subVectors(ini.modelo.position, camaraJogo.position)
-        .normalize();
-    const camDir = new THREE.Vector3();
-    camaraJogo.getWorldDirection(camDir);
-    return camDir.dot(dirParaIni) > 0.55; // ~56° de campo de visao
-}
 
 function trocarClip(ini, clip) {
     if (!clip || ini.acaoAtual?.getClip() === clip) return;
@@ -944,32 +1009,119 @@ function trocarClip(ini, clip) {
     ini.acaoAtual.reset().fadeIn(0.25).play();
 }
 
-function moverInimigo(ini, delta) {
-    const dir = new THREE.Vector3()
-        .subVectors(playerPos, ini.modelo.position)
-        .setY(0);
-    const dist = dir.length();
-    if (dist < 1.2) return; // ja chegou ao jogador
-    dir.normalize();
+// true se o jogador estiver a olhar para o inimigo (ângulo < 35°) e a < 12 unidades
+function _jogadorOlha(ini) {
+    const dir = new THREE.Vector3();
+    camaraJogo.getWorldDirection(dir);
+    const toIni = new THREE.Vector3()
+        .subVectors(ini.modelo.position, camaraJogo.position)
+        .normalize();
+    toIni.y = 0; dir.y = 0;
+    if (toIni.lengthSq() < 0.001) return false;
+    toIni.normalize(); dir.normalize();
+    const dot = dir.dot(toIni);
+    const dist = camaraJogo.position.distanceTo(ini.modelo.position);
+    return dot > 0.82 && dist < 12; // cos(35°) ≈ 0.82
+}
 
-    const passo = ini.velocidade * delta;
-    const nova  = ini.modelo.position.clone().addScaledVector(dir, passo);
-
-    // so anda no chaopaandar (colisao igual ao jogador)
-    const M = 0.3;
-    const valido = zonasCaminhaveis.some(bb =>
-        nova.x >= bb.min.x + M && nova.x <= bb.max.x - M &&
-        nova.z >= bb.min.z + M && nova.z <= bb.max.z - M
+function _posIniValida(pos, margem) {
+    return zonasCaminhaveis.some(bb =>
+        pos.x >= bb.min.x + margem && pos.x <= bb.max.x - margem &&
+        pos.z >= bb.min.z + margem && pos.z <= bb.max.z - margem
     );
-    if (valido) {
-        ini.modelo.position.copy(nova);
-        ini.modelo.rotation.y = Math.atan2(dir.x, dir.z);
+}
+
+// puxa o inimigo para o centro do eixo ESTREITO da zone em que está (evita paredes)
+function _centrarNaZona(pos) {
+    let melhor = null, melhorDist = Infinity;
+    zonasCaminhaveis.forEach(bb => {
+        if (pos.x < bb.min.x || pos.x > bb.max.x ||
+            pos.z < bb.min.z || pos.z > bb.max.z) return;
+        const cx = (bb.min.x + bb.max.x) / 2;
+        const cz = (bb.min.z + bb.max.z) / 2;
+        const d  = Math.hypot(pos.x - cx, pos.z - cz);
+        if (d < melhorDist) { melhorDist = d; melhor = { bb, cx, cz }; }
+    });
+    if (!melhor) return;
+    const { bb, cx, cz } = melhor;
+    const szX = bb.max.x - bb.min.x;
+    const szZ = bb.max.z - bb.min.z;
+    const k = 0.07; // força de centragem por frame
+    if (szX <= szZ) pos.x += (cx - pos.x) * k; // corredor em Z → centra em X
+    if (szZ <= szX) pos.z += (cz - pos.z) * k; // corredor em X → centra em Z
+}
+
+// movimento aleatório estilo Pac-Man: escolhe direções possíveis,
+// prefere continuar em frente, evita reversão mas não a proíbe
+function moverInimigoRandom(ini, delta) {
+    const MARGEM  = 0.5;
+    const TESTE   = Math.max(ini.velocidade * delta * 5, 1.5); // lookahead para testar dir
+    const passo   = ini.velocidade * delta;
+
+    ini.tempoMudanca = Math.max(0, ini.tempoMudanca - delta);
+
+    // garante que a direção é horizontal e normalizada
+    ini.dirAtual.y = 0;
+    if (ini.dirAtual.lengthSq() < 0.01) {
+        const a = Math.random() * Math.PI * 2;
+        ini.dirAtual.set(Math.sin(a), 0, Math.cos(a));
+    }
+    ini.dirAtual.normalize();
+
+    const pos     = ini.modelo.position;
+    const angAtual = Math.atan2(ini.dirAtual.x, ini.dirAtual.z);
+
+    // tenta continuar na direção atual se ainda não é hora de mudar
+    const novaFrente = pos.clone().addScaledVector(ini.dirAtual, passo);
+    const livreFrente = _posIniValida(novaFrente, MARGEM);
+
+    if (livreFrente && ini.tempoMudanca > 0) {
+        pos.copy(novaFrente);
+        pos.y = ini.spawnY;
+        _centrarNaZona(pos);
+        ini.modelo.rotation.y = angAtual;
         trocarClip(ini, ini.clipAndar || ini.clipIdle);
+        return;
+    }
+
+    // bloqueado ou tempo de mudar — seleciona nova direção
+    ini.tempoMudanca = 1.5 + Math.random() * 2.5;
+
+    const candidatos = [
+        { ang: angAtual,              peso: 3 }, // frente
+        { ang: angAtual + Math.PI/2,  peso: 2 }, // esquerda 90°
+        { ang: angAtual - Math.PI/2,  peso: 2 }, // direita 90°
+        { ang: angAtual + Math.PI,    peso: 1 }, // inversão (menos provável)
+    ];
+
+    const validos = candidatos.filter(c => {
+        const dir = new THREE.Vector3(Math.sin(c.ang), 0, Math.cos(c.ang));
+        const test = pos.clone().addScaledVector(dir, TESTE);
+        return _posIniValida(test, MARGEM);
+    });
+
+    if (validos.length > 0) {
+        const totalPeso = validos.reduce((s, c) => s + c.peso, 0);
+        let r = Math.random() * totalPeso;
+        let escolhido = validos[validos.length - 1];
+        for (const c of validos) { r -= c.peso; if (r <= 0) { escolhido = c; break; } }
+        ini.dirAtual.set(Math.sin(escolhido.ang), 0, Math.cos(escolhido.ang));
+    }
+
+    // tenta mover com a nova direção
+    const novaNova = pos.clone().addScaledVector(ini.dirAtual, passo);
+    if (_posIniValida(novaNova, MARGEM)) {
+        pos.copy(novaNova);
+        pos.y = ini.spawnY;
+        _centrarNaZona(pos);
+        ini.modelo.rotation.y = Math.atan2(ini.dirAtual.x, ini.dirAtual.z);
+        trocarClip(ini, ini.clipAndar || ini.clipIdle);
+    } else {
+        trocarClip(ini, ini.clipIdle);
     }
 }
 
 function snapParaChaopaandar(ini) {
-    // encontra o centro da zona walkable mais proxima do spawn pretendido
     let melhor = null, melhorDist = Infinity;
     zonasCaminhaveis.forEach(bb => {
         const cx = (bb.min.x + bb.max.x) / 2;
@@ -980,48 +1132,59 @@ function snapParaChaopaandar(ini) {
     if (melhor) {
         ini.modelo.position.x = melhor.cx;
         ini.modelo.position.z = melhor.cz;
+        ini.modelo.position.y = ini.spawnY;
     }
     ini.posicionado = true;
 }
 
+function atualizarCoracaoProximidade() {
+    // distancia ao inimigo ativo mais proximo
+    let minDist = Infinity;
+    inimigos.forEach(ini => {
+        if (!ini.ativo) return;
+        const d = Math.hypot(ini.modelo.position.x - playerPos.x, ini.modelo.position.z - playerPos.z);
+        if (d < minDist) minDist = d;
+    });
+    if (minDist === Infinity) { setCoracaoFactor(1.0); return; }
+    // factor: 1.0 a distancia 20+, ate 2.5 a distancia 3 ou menos
+    const t = 1 - Math.min(1, Math.max(0, (minDist - 3) / 17));
+    setCoracaoFactor(1.0 + t * 1.5);
+}
+
 function atualizarInimigos(delta) {
     if (!jogoIniciado) return;
-    const camDir = new THREE.Vector3();
-    camaraJogo.getWorldDirection(camDir);
+
+    // ativaçao desligada por enquanto — ajustar posições primeiro
+    // if (tempoJogo >  5 && !alertas.freddy) ativarInimigo('freddy');
+    // if (tempoJogo > 15 && !alertas.bonnie) ativarInimigo('bonnie');
+    // if (tempoJogo > 25 && !alertas.chica)  ativarInimigo('chica');
+    // if (tokensApanhados >= 5 && !alertas.foxy) ativarInimigo('foxy');
 
     inimigos.forEach(ini => {
-        // snap para zona walkable na 1a frame (chaopaandar ja carregado)
-        if (!ini.posicionado && zonasCaminhaveis.length > 0) snapParaChaopaandar(ini);
-        if (!ini.ativo) return;
+        if (!ini.ativo) return; // snap só acontece em ativarInimigo()
 
-        const olha = jogadorOlhaParaInimigo(ini);
-
-        if (ini.nome === 'freddy') {
-            // Freddy ignora o olhar — move sempre
-            moverInimigo(ini, delta);
-        } else {
-            // Weeping Angel: congela quando o jogador olha
-            if (olha) {
-                ini.congelado = true;
-                trocarClip(ini, ini.clipIdle);
-            } else {
-                ini.congelado = false;
-                moverInimigo(ini, delta);
-            }
+        // weeping angel: Freddy e Foxy ficam parados quando o jogador olha para eles
+        const temAngelMechanic = ini.nome === 'freddy' || ini.nome === 'foxy';
+        if (temAngelMechanic && _jogadorOlha(ini)) {
+            trocarClip(ini, ini.clipIdle);
+            return;
         }
 
-        // verificar captura
-        const d2 = Math.hypot(
-            ini.modelo.position.x - playerPos.x,
-            ini.modelo.position.z - playerPos.z
-        );
-        if (d2 < 1.5) jogoOver(ini.nome);
+        moverInimigoRandom(ini, delta);
+
+        // captura do jogador — desativado para teste de movimento
+        // const d2 = Math.hypot(
+        //     ini.modelo.position.x - playerPos.x,
+        //     ini.modelo.position.z - playerPos.z
+        // );
+        // if (d2 < 1.5) jogoOver(ini.nome);
     });
 }
 
 // ─── MENSAGENS / ALERTAS ───────────────────────────────────────────
 
 function mostrarMensagemInicio() {
+    mensagemInicioAtiva = true;
     const el = document.createElement('div');
     Object.assign(el.style, {
         position: 'fixed', inset: '0', zIndex: '40',
@@ -1047,31 +1210,19 @@ function mostrarMensagemInicio() {
     setTimeout(() => {
         el.style.transition = 'opacity 1.5s ease';
         el.style.opacity = '0';
-        setTimeout(() => el.remove(), 1600);
-    }, 4500);
+        setTimeout(() => {
+            el.remove();
+            mensagemInicioAtiva = false;
+            tocar('phoneguy'); // inicia o phone guy so quando o aviso desaparece
+        }, 1600);
+    }, 2500);
 }
 
 const ALERTAS_CONFIG = {
-    freddy: {
-        titulo:   '⚠ FALHA DE SISTEMA',
-        msg:      'FREDDY FAZBEAR entrou em\nmodo de entretenimento autónomo.\n\nTenha uma boa noite.',
-        cor:      '#ff4444'
-    },
-    bonnie: {
-        titulo:   '📡 SINAL PERDIDO',
-        msg:      'Ligação ao BONNIE interrompida.\nÚltima localização conhecida: Palco.\nOs técnicos foram notificados.\n\n(Ninguém foi notificado.)',
-        cor:      '#9955ff'
-    },
-    chica: {
-        titulo:   '🍕 ALERTA DE COZINHA',
-        msg:      'CHICA abandonou o posto sem autorização.\nMotivo reportado: em busca de pizza.\n\nFique calmo. Não faça barulho.',
-        cor:      '#ffaa00'
-    },
-    foxy: {
-        titulo:   '☠ PIRATE COVE',
-        msg:      'AVARIA RESOLVIDA — Pirate Cove\nvolta a estar operacional.\n\nFOXY ESTÁ A CAMINHO.',
-        cor:      '#ff3300'
-    }
+    freddy: { titulo: '⚠  FREDDY FAZBEAR  saiu do palco',   cor: '#ff4444' },
+    bonnie: { titulo: '⚠  BONNIE  saiu do palco',            cor: '#9955ff' },
+    chica:  { titulo: '⚠  CHICA  saiu do palco',             cor: '#ffaa00' },
+    foxy:   { titulo: '⚠  FOXY  saiu da Pirate Cove',        cor: '#ff3300' },
 };
 
 function mostrarAlerta(nome) {
@@ -1080,28 +1231,25 @@ function mostrarAlerta(nome) {
 
     const el = document.createElement('div');
     Object.assign(el.style, {
-        position: 'fixed', top: '50%', left: '50%',
-        transform: 'translate(-50%,-50%)',
-        zIndex: '45', minWidth: '320px', maxWidth: '480px',
-        background: 'rgba(0,0,0,0.92)',
-        border: `1.5px solid ${cfg.cor}`,
-        boxShadow: `0 0 22px ${cfg.cor}44`,
+        position: 'fixed', top: '0', left: '0', right: '0',
+        zIndex: '45',
+        background: 'rgba(0,0,0,0.85)',
+        borderBottom: `1.5px solid ${cfg.cor}`,
         fontFamily: "'Courier New', monospace",
         color: cfg.cor, textAlign: 'center',
-        padding: '24px 32px', borderRadius: '4px',
-        opacity: '0', transition: 'opacity 0.5s ease',
+        padding: '8px 16px',
+        fontSize: 'clamp(0.7em,1.4vw,0.9em)',
+        letterSpacing: '4px',
+        opacity: '0', transition: 'opacity 0.3s ease',
         pointerEvents: 'none'
     });
-    el.innerHTML = `
-        <div style="font-size:1em;letter-spacing:5px;margin-bottom:14px;font-weight:bold">${cfg.titulo}</div>
-        <div style="font-size:0.72em;letter-spacing:2px;line-height:1.9;color:#cccccc;white-space:pre-line">${cfg.msg}</div>
-    `;
+    el.textContent = cfg.titulo;
     document.body.appendChild(el);
     requestAnimationFrame(() => { el.style.opacity = '1'; });
     setTimeout(() => {
         el.style.opacity = '0';
-        setTimeout(() => el.remove(), 600);
-    }, 4000);
+        setTimeout(() => el.remove(), 400);
+    }, 3000);
 }
 
 function ativarInimigo(nome) {
@@ -1109,11 +1257,20 @@ function ativarInimigo(nome) {
     mostrarAlerta(nome);
     const ini = inimigos.find(i => i.nome === nome);
     if (!ini) return;
+
+    // snap para a zona caminhável mais próxima do spawn ANTES de ativar
+    if (zonasCaminhaveis.length > 0) snapParaChaopaandar(ini);
     ini.ativo = true;
+
     // troca para clip de andar se existir
     if (ini.clipAndar && ini.acaoAtual) {
         ini.acaoAtual.stop();
         ini.acaoAtual = ini.mixer.clipAction(ini.clipAndar);
         ini.acaoAtual.play();
+        // walkYOffset compensa a diferença de root bone Y entre idle e andar
+        if (ini.walkYOffset) {
+            ini.spawnY += ini.walkYOffset;
+            ini.modelo.position.y = ini.spawnY;
+        }
     }
 }

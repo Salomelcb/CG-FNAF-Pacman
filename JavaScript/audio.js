@@ -26,14 +26,16 @@ function _add(id, src, tipo, loop = false, boost = 1.0) {
 }
 
 _add('menuTema',   './sounds/musica/menu_tema.mp3',      'musica', true,  0.62 );
-_add('coracao',    './sounds/ambiente/coracao.wav',       'geral',  true,  1.5  );
+_add('coracao',    './sounds/ambiente/coracao.wav',       'geral',  true,  0.5  );
 _add('luzFlicker', './sounds/ambiente/luz_flicker.mp3',  'geral',  true,  0.12 ); // fundo, muito ligeiro
 _add('hoverBotao', './sounds/sfx/hover_botao.mp3',       'sfx',    false, 0.3  );
 _add('clickBotao',       './sounds/sfx/click_botao.mp3',            'sfx',    false);
 _add('clickDificuldade', './sounds/sfx/click_botaodificuldade.mp3', 'sfx',    false);
+_add('phoneguy',         './sounds/sfx/phoneguy.mp3',               'sfx',    false, 1.0  );
 _add('passosAnim',       './sounds/sfx/passos_anim.mp3',            'sfx',    false);
 _add('passosDuto',       './sounds/sfx/passos_duto.mp3',            'sfx',    false);
-_add('passosJogo',       './sounds/sfx/passos_jogo.mp3',            'sfx',    true,  6.0  );
+_add('passosJogo',       './sounds/sfx/passos_jogo.mp3',            'sfx',    true,  12.0 );
+_add('passosHeavy',      './sounds/sfx/passos_heavy.mp3',           'sfx',    true,  8.0  );
 _add('token',            './sounds/sfx/token.wav',                  'sfx',    false);
 
 function _vol(s) {
@@ -69,23 +71,41 @@ export function estaATocando(id) {
     return s ? !s.a.paused : false;
 }
 
+// factor de volume do coracao baseado na proximidade dos inimigos (1.0 = base, >1 = mais perto)
+let _coracaoFactor = 1.0;
+export function setCoracaoFactor(f) {
+    _coracaoFactor = Math.max(1.0, f);
+    const s = _reg['coracao'];
+    if (!s) return;
+    s.a.volume       = Math.min(1, _vol(s) * _coracaoFactor);
+    // acelera ligeiramente com a proximidade: 1.0 base → até 1.5x mais rápido
+    s.a.playbackRate = 1.0 + (_coracaoFactor - 1.0) * 0.33;
+}
+
 // pausa sons ambientais/música quando abre opções ou pausa
 export function pausarAmbientais() {
-    ['coracao', 'luzFlicker', 'menuTema', 'passosJogo'].forEach(id => {
+    ['coracao', 'luzFlicker', 'menuTema', 'passosHeavy'].forEach(id => {
         const s = _reg[id];
         if (s && !s.a.paused) { s.a.pause(); s.a._pausado = true; }
     });
 }
 
 // retoma apenas os que foram pausados por pausarAmbientais
-// passosJogo NÃO é retomado aqui — é gerido pelo movimento do jogador
+// passosHeavy NÃO é retomado aqui — é gerido pelo movimento do jogador
 export function retomarAmbientais() {
     ['coracao', 'luzFlicker', 'menuTema'].forEach(id => {
         const s = _reg[id];
         if (s && s.a._pausado) { delete s.a._pausado; s.a.play().catch(() => {}); }
     });
-    const pj = _reg['passosJogo'];
-    if (pj && pj.a._pausado) delete pj.a._pausado;
+    const ph = _reg['passosHeavy'];
+    if (ph && ph.a._pausado) delete ph.a._pausado;
+}
+
+export function atualizarPhoneguyDistancia(distXZ) {
+    const s = _reg['phoneguy'];
+    if (!s || s.a.paused) return;
+    const vol = Math.max(0, 1 - distXZ / 18); // inaudivel a partir de 18 unidades
+    s.a.volume = Math.min(1, _vol(s) * vol);
 }
 
 export function atualizarVolumes() {

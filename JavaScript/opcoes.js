@@ -292,7 +292,12 @@ function _criarOverlayPausa() {
 
     document.getElementById('fnaf-btn-sair-pausa')?.addEventListener('click', () => {
         tocar('clickBotao');
-        if (_cbSair) _cbSair();
+        // esconde o overlay de pausa antes de mostrar a tela de sair
+        _divPausa.style.opacity = '0';
+        setTimeout(() => {
+            _divPausa.style.display = 'none';
+            if (_cbSair) _cbSair();
+        }, 300);
     });
 }
 
