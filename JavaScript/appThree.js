@@ -188,7 +188,7 @@ function Start() {
         fadeOverlay.style.transition = 'none';
         fadeOverlay.style.opacity    = '0';
         parar('menuTema');
-        iniciarJogo(renderer);
+        iniciarJogo(renderer, _nivel);
     });
     telaDificuldade  = dif.telaDificuldade;
     iniciarRuidoDuto = dif.iniciarRuidoDuto;
@@ -486,7 +486,7 @@ function loop() {
         if (progressoSaida >= 1) {
             loopAtivo = false;
             parar('menuTema');
-            iniciarJogo(renderer);
+            iniciarJogo(renderer, 'facil');
         }
 
         renderer.render(cena, camara);

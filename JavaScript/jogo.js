@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { tocar, parar, estaATocando, setCoracaoFactor, atualizarPhoneguyDistancia } from './audio.js';
+import { tocar, parar, estaATocando, setCoracaoFactor, atualizarPhoneguyDistancia, aoPhoneguyTerminar } from './audio.js';
 import { mostrarPausa, esconderPausa, estaPausado, configurarCallbacks } from './opcoes.js';
 
 const loader = new GLTFLoader();
@@ -21,7 +21,13 @@ let targetAngle = 0;
 // colisao — zonas caminhaveis carregadas do chaopaandar.glb
 let mapaBBs = [];
 const _pBox = new THREE.Box3();
-let zonasCaminhaveis = [];
+let zonasCaminhaveis   = [];
+let zonasSemExpansao   = []; // cópias sem expandByScalar — usadas em _caminhoClear para evitar pontes sobre paredes
+
+// waypoints — centros das zones caminhaveis (mesmas posições que os tokens)
+let waypoints      = [];  // [{ x, y, z }]
+let waypointAdj    = [];  // lista de adjacência: waypointAdj[i] = [j, k, ...]
+let _waypointFloorY = 0;  // Y único para todos os waypoints (superficie real do chão)
 
 // efeito acordar
 let acordarProgresso = 0;
@@ -47,12 +53,18 @@ const SPAWN_CHICA  = new THREE.Vector3( 4.0, 0, -36);
 const SPAWN_FOXY   = new THREE.Vector3(-9.0, 0, -26);
 
 // ─── ESTADO DO JOGO ────────────────────────────────────────────────
-const TOKENS_FOXY   = 10;
 let mensagemInicioAtiva = false;
-const OFFICE_XZ = new THREE.Vector2(0, 2); // posicao XZ do escritorio (spawn do jogador) // tokens para o Foxy sair da cove
+const OFFICE_XZ = new THREE.Vector2(0, 2);
 let tempoJogo       = 0;
 let jogoIniciado    = false;
 const alertas       = { freddy: false, bonnie: false, chica: false, foxy: false };
+
+// dificuldade e sistema de ativação
+let dificuldadeAtual    = 'facil';
+let phoneguyTerminou    = false;
+let tempoAposPhoneguy   = 0;
+let _pendingActivations = [];   // [{ nome, check: () => bool, fired }]
+let _ativacoesPreparadas = false;
 
 // intro camera (sair do duto para o escritorio)
 let introCamera             = false;
@@ -68,7 +80,8 @@ let smoothX   = 0, smoothY   = 0;
 let rawMX     = 0, rawMY     = 0; // coordenadas -1..1 para unproject
 let luzAlvo   = null;
 
-export function iniciarJogo(renderer) {
+export function iniciarJogo(renderer, dificuldade = 'facil') {
+    dificuldadeAtual = dificuldade;
     window.addEventListener('mousemove', e => {
         // -1 a 1 normalizado, Y invertido (topo do ecra = olhar para cima)
         rawMX     =  (e.clientX / window.innerWidth)  * 2 - 1;
@@ -85,7 +98,7 @@ export function iniciarJogo(renderer) {
 
     document.addEventListener('keydown', e => {
         if (e.code === 'Escape') {
-            if (!estaPausado() && jogoIniciado) {
+            if (!estaPausado() && jogoIniciado && !mensagemInicioAtiva && !introCamera) {
                 tocar('clickBotao');
                 mostrarPausa();
             }
@@ -214,10 +227,12 @@ export function iniciarJogo(renderer) {
             if (!o.isMesh) return;
             o.visible = false;
             const bb = new THREE.Box3().setFromObject(o);
+            zonasSemExpansao.push(bb.clone()); // cópia exacta antes de expandir
             bb.expandByScalar(0.08); // cobre micro-gaps entre planes adjacentes
             zonasCaminhaveis.push(bb);
         });
         criarTokens();
+        _construirWaypoints();
     });
     criarMinimapa();
     criarHUD();
@@ -301,23 +316,24 @@ export function iniciarJogo(renderer) {
                 ini.modelo.position.z = z;
                 // força Y ao spawnY (nunca afunda no chão)
                 if (ini.spawnY !== undefined) ini.modelo.position.y = ini.spawnY;
-                // cancela X/Z nos grupos de armature (causa principal de teletransporte)
+                // cancela X/Y/Z nos grupos de armature (evita teletransporte e flutuação)
                 ini.armatureGrupos?.forEach(({ obj, initPos }) => {
                     obj.position.x = initPos.x;
+                    obj.position.y = initPos.y;
                     obj.position.z = initPos.z;
                 });
-                // cancela X/Z nos root bones
+                // cancela X/Y/Z nos root bones (Y cancela root motion vertical do Freddy etc.)
                 ini.rootBones?.forEach((b, i) => {
                     const ip = ini.rootBonesInitPos?.[i];
-                    if (ip) { b.position.x = ip.x; b.position.z = ip.z; }
+                    if (ip) { b.position.x = ip.x; b.position.y = ip.y; b.position.z = ip.z; }
                 });
             });
             atualizarMovimento(delta);
             atualizarInimigos(delta);
             atualizarCoracaoProximidade();
             atualizarPhoneguyDistancia(Math.hypot(playerPos.x - OFFICE_XZ.x, playerPos.z - OFFICE_XZ.y));
+            atualizarCamera();
         }
-        atualizarCamera();
         atualizarTokens();
         atualizarMinimapa();
 
@@ -680,14 +696,17 @@ function atualizarMinimapa() {
     });
 
     // inimigos — ponto vermelho + letra inicial
-    // chica: mesh tem offset geometrico em X e Z vs origem do modelo — compensar no minimap
+    // spawned: posição do modelo tem offsets de geometria → corrigir
+    // ativo (waypoint): posição exata → sem correção
     const _chicaOff = spawnPalco ? (spawnPalco.bb.max.x - spawnPalco.bb.min.x) * 0.20 : 1.7;
     inimigos.forEach(ini => {
         const ip = ini.modelo.position;
-        const vizX = ini.nome === 'chica' ? ip.x - _chicaOff : ip.x;
-        const vizZ = ini.nome === 'chica' ? ip.z + 5.0
-                   : ini.nome === 'foxy'  ? ip.z - 2.0
-                   : ip.z;
+        let vizX = ip.x, vizZ = ip.z;
+        if (!ini.ativo) {
+            // spawned — offsets de geometria como antes
+            if (ini.nome === 'chica') { vizX = ip.x - _chicaOff; vizZ = ip.z + 5.0; }
+            if (ini.nome === 'foxy')  { vizZ = ip.z - 3.0; } // spawn em +3, mostra no centro da cova
+        }
         const ex = (vizX - playerPos.x) * S;
         const ey = (vizZ - playerPos.z) * S;
         ctxMapa.fillStyle = '#ff2222';
@@ -885,8 +904,8 @@ function carregarPersonagens(floorY) {
 
         // foxy na Pirate Cove — cova abre para corredor (+Z), interior fica em -Z
         if (spawnCova) {
-            // foxy dentro da cova (interior em +Z): spawn +2 do centro
-            SPAWN_FOXY.set(spawnCova.centro.x, spawnCova.bb.max.y + 1.95, spawnCova.centro.z + 2.0);
+            // foxy dentro da cova (interior em +Z): +3 para não sair com o braço pela cortina
+            SPAWN_FOXY.set(spawnCova.centro.x, spawnCova.bb.max.y + 1.95, spawnCova.centro.z + 3.0);
         } else {
             SPAWN_FOXY.set(cx + off * 2, topY + 1.95, cz + 3.5);
         }
@@ -904,7 +923,7 @@ function carregarPersonagens(floorY) {
 
     const ESC = { freddy: 1.15, bonnie: 2.65, chica: 0.035, foxy: 1.15 };
 
-    function loadChar(path, spawn, rotY, velocidade, escala, nome, clipNome, timeScale = 1.0, walkYOffset = 0) {
+    function loadChar(path, spawn, rotY, velocidade, escala, nome, clipNome, timeScale = 1.0, walkYOffset = 0, clipAndarNome = null, walkTimeScale = 1.0, forcedFloorOffset = undefined) {
         loader.load(path, gltf => {
             const modelo = gltf.scene;
             modelo.scale.setScalar(escala);
@@ -912,7 +931,9 @@ function carregarPersonagens(floorY) {
 
             // posiciona no spawn
             modelo.position.set(spawn.x, spawn.y, spawn.z);
-            console.log(`[${nome}] posicao final:`, modelo.position.x.toFixed(1), modelo.position.y.toFixed(1), modelo.position.z.toFixed(1), '| bb height:', new THREE.Box3().setFromObject(modelo).getSize(new THREE.Vector3()).y.toFixed(2));
+            modelo.updateMatrixWorld(true);
+            const _geomMinY = calcMinY(modelo);
+            console.log(`[${nome}] spawn.y:`, spawn.y.toFixed(2), '| geomMinY:', _geomMinY.toFixed(2), '| diff:', (spawn.y - _geomMinY).toFixed(2));
             modelo.rotation.y = rotY;
 
             // emissive + desativar frustum culling (evita que bones animados escondam o modelo)
@@ -945,11 +966,18 @@ function carregarPersonagens(floorY) {
 
             gltf.animations.forEach(c => {
                 const n = c.name.toLowerCase();
-                if (n.includes('walk') || n.includes('run'))                                 clipAndar     = c;
-                else if (n.includes('jump') || n.includes('scare') || n.includes('attack'))  clipJumpscare = c;
+                if (n.includes('walk') || n.includes('run') || n.includes('charge')) clipAndar     = c;
+                else if (n.includes('jump') || n.includes('scare') || n.includes('attack'))         clipJumpscare = c;
                 else clipIdle = clipIdle || c;
             });
             if (!clipIdle && gltf.animations.length > 0) clipIdle = gltf.animations[0];
+            // sobrepõe clip de andar se nome explícito fornecido
+            if (clipAndarNome) {
+                clipAndar =
+                    gltf.animations.find(c => c.name.toLowerCase() === clipAndarNome.toLowerCase()) ||
+                    gltf.animations.find(c => c.name.toLowerCase().includes(clipAndarNome.toLowerCase())) ||
+                    clipAndar;
+            }
 
             // usa clip especifico se existir, senao fallback
             const clipParaTocar = clipEspecifico || clipIdle;
@@ -980,24 +1008,109 @@ function carregarPersonagens(floorY) {
                 mixer.update(0.1); // avanca mais para sair da bind pose
             }
 
-            const angInicial = Math.random() * Math.PI * 2;
+            // floorOffset: baixa o modelo para os pés ficarem no chão
+            const computedFloorOffset = Math.min(0, spawn.y - _geomMinY);
+            const floorOffset = forcedFloorOffset !== undefined ? forcedFloorOffset : computedFloorOffset;
+            console.log(`[${nome}] floorOffset:`, floorOffset.toFixed(3), '(computed:', computedFloorOffset.toFixed(3), ')');
+
             inimigos.push({
                 nome, modelo, mixer, rootBones, rootBonesInitPos,
                 armatureGrupos,
                 clipIdle, clipAndar, clipJumpscare, acaoAtual,
-                spawnPos: spawn.clone(), spawnY: spawn.y, walkYOffset,
-                velocidade,
+                spawnPos: spawn.clone(), spawnY: spawn.y, walkYOffset, walkTimeScale,
+                velocidade, floorOffset,
                 ativo: false, congelado: false, posicionado: false,
-                dirAtual: new THREE.Vector3(Math.sin(angInicial), 0, Math.cos(angInicial)),
-                tempoMudanca: Math.random() * 1.5,
+                waypointIdx: undefined, targetWaypointIdx: undefined, prevWaypointIdx: undefined,
             });
         }, undefined, err => console.error('Erro ao carregar', nome, err));
     }
 
-    loadChar('./Models/Personagens/freddy_ar.glb', SPAWN_FREDDY,  0,    1.8, ESC.freddy, 'freddy', 'Freddy--Idle',                1.0, 0  );
-    loadChar('./Models/Personagens/bonnie.glb',    SPAWN_BONNIE,  0.25, 2.0, ESC.bonnie, 'bonnie', 'Bonnie--Idle',                1.0, 0  );
-    loadChar('./Models/Personagens/chica.glb',     SPAWN_CHICA,   0,    1.9, ESC.chica,  'chica',  'chica_rings_skeleton|idle',   1.0, 0  );
-    loadChar('./Models/Personagens/foxy_ar.glb',   SPAWN_FOXY,    0,    3.0, ESC.foxy,   'foxy',   'Foxy--Idle',                  1.0, 0  );
+    //                 path                          spawn         rotY  vel   esc         nome      clipIdle                       tS   wYOff  clipAndar                      walkTS  forcedFloorOffset
+    loadChar('./Models/Personagens/freddy_ar.glb', SPAWN_FREDDY,  0,    1.8, ESC.freddy, 'freddy', 'Freddy--Idle',                1.0, 0,    'Freddy--Charge',              0.35,   -1.1);
+    loadChar('./Models/Personagens/bonnie.glb',    SPAWN_BONNIE,  0.25, 2.0, ESC.bonnie, 'bonnie', 'Bonnie--Idle',                1.0, 0,    'Bonnie--walk',                1.0 );
+    loadChar('./Models/Personagens/chica.glb',     SPAWN_CHICA,   0,    1.9, ESC.chica,  'chica',  'chica_rings_skeleton|idle',   1.0, 0,    'chica_rings_skeleton|walk',   1.0 );
+    loadChar('./Models/Personagens/foxy_ar.glb',   SPAWN_FOXY,    0,    3.0, ESC.foxy,   'foxy',   'Foxy--Idle',                  1.0, 0,    'Foxy--Charge',                0.35);
+}
+
+// ─── WAYPOINTS ─────────────────────────────────────────────────────
+
+// verifica se o segmento (ax,az)→(bx,bz) passa pelo interior das zones (não pelas bordas)
+function _caminhoClear(ax, az, bx, bz) {
+    const M     = 0.25; // margem interior — força caminhos pelo centro, não pelas arestas
+    const dist  = Math.hypot(bx - ax, bz - az);
+    const steps = Math.max(4, Math.ceil(dist / 0.35));
+    for (let s = 0; s <= steps; s++) {
+        const t  = s / steps;
+        const mx = ax + (bx - ax) * t;
+        const mz = az + (bz - az) * t;
+        const ok = zonasSemExpansao.some(bb =>
+            mx >= bb.min.x + M && mx <= bb.max.x - M &&
+            mz >= bb.min.z + M && mz <= bb.max.z - M
+        );
+        if (!ok) return false;
+    }
+    return true;
+}
+
+function _construirWaypoints() {
+    const SPACING = 5.5; // igual ao criarTokens
+    waypoints   = [];
+    waypointAdj = [];
+
+    // Y do chão = mínimo de todos os topo das zones (ignora zones elevadas do palco)
+    _waypointFloorY = zonasCaminhaveis.reduce((mn, bb) => Math.min(mn, bb.max.y), Infinity);
+
+    zonasCaminhaveis.forEach(bb => {
+        const w  = bb.max.x - bb.min.x;
+        const d  = bb.max.z - bb.min.z;
+        const cx = (bb.min.x + bb.max.x) / 2;
+        const cz = (bb.min.z + bb.max.z) / 2;
+        if (w < 1.0 || d < 1.0) return;
+
+        const cols = Math.max(1, Math.round(w / SPACING));
+        const rows = Math.max(1, Math.round(d / SPACING));
+        for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
+                const x = cols === 1 ? cx : cx + (c - (cols - 1) / 2) * SPACING;
+                const z = rows === 1 ? cz : cz + (r - (rows - 1) / 2) * SPACING;
+                if (x < bb.min.x + 0.4 || x > bb.max.x - 0.4) continue;
+                if (z < bb.min.z + 0.4 || z > bb.max.z - 0.4) continue;
+                // todos os waypoints partilham o mesmo Y — chão sempre plano
+                waypoints.push({ x, y: _waypointFloorY, z });
+            }
+        }
+    });
+
+    // Deduplica: zonas sobrepostas/adjacentes podem gerar waypoints muito próximos
+    const MERGE_DIST = 2.0;
+    const deduped = [];
+    waypoints.forEach(wp => {
+        if (!deduped.some(d => Math.hypot(d.x - wp.x, d.z - wp.z) < MERGE_DIST))
+            deduped.push(wp);
+    });
+    waypoints = deduped;
+
+    // adjacência: só ligações cardinais (X ou Z dominante, não diagonal) + caminho livre
+    const ADJ_DIST = SPACING * 1.8; // ~9.9 u
+    waypointAdj = waypoints.map(() => []);
+    for (let i = 0; i < waypoints.length; i++) {
+        for (let j = i + 1; j < waypoints.length; j++) {
+            const adx  = Math.abs(waypoints[i].x - waypoints[j].x);
+            const adz  = Math.abs(waypoints[i].z - waypoints[j].z);
+            const dist = Math.hypot(adx, adz);
+            if (dist > ADJ_DIST) continue;
+            // rejeita diagonais: o eixo menor deve ser < 30% do maior
+            const menor = Math.min(adx, adz);
+            const maior = Math.max(adx, adz);
+            if (maior > 0.01 && menor / maior > 0.3) continue;
+            // caminho totalmente dentro das zones caminhaveis
+            if (!_caminhoClear(waypoints[i].x, waypoints[i].z,
+                               waypoints[j].x, waypoints[j].z)) continue;
+            waypointAdj[i].push(j);
+            waypointAdj[j].push(i);
+        }
+    }
+    console.log(`[waypoints] ${waypoints.length} nós, ${waypointAdj.reduce((s, a) => s + a.length, 0) / 2} arestas, floorY=${_waypointFloorY.toFixed(3)}`);
 }
 
 // ─── AI DOS INIMIGOS ───────────────────────────────────────────────
@@ -1051,77 +1164,111 @@ function _centrarNaZona(pos) {
     if (szZ <= szX) pos.z += (cz - pos.z) * k; // corredor em X → centra em Z
 }
 
-// movimento aleatório estilo Pac-Man: escolhe direções possíveis,
-// prefere continuar em frente, evita reversão mas não a proíbe
-function moverInimigoRandom(ini, delta) {
-    const MARGEM  = 0.5;
-    const TESTE   = Math.max(ini.velocidade * delta * 5, 1.5); // lookahead para testar dir
-    const passo   = ini.velocidade * delta;
+// colisão para animatronicos — exactamente igual ao jogador (mesma margem)
+function _colideAnim(x, z) {
+    const M = 0.15;
+    return !zonasCaminhaveis.some(bb =>
+        x >= bb.min.x + M && x <= bb.max.x - M &&
+        z >= bb.min.z + M && z <= bb.max.z - M
+    );
+}
 
-    ini.tempoMudanca = Math.max(0, ini.tempoMudanca - delta);
+// movimento por waypoints — animatronics movem-se entre os centros das zones caminhaveis
+function moverInimigoWaypoint(ini, delta) {
+    if (waypoints.length === 0 || ini.waypointIdx === undefined) return;
 
-    // garante que a direção é horizontal e normalizada
-    ini.dirAtual.y = 0;
-    if (ini.dirAtual.lengthSq() < 0.01) {
-        const a = Math.random() * Math.PI * 2;
-        ini.dirAtual.set(Math.sin(a), 0, Math.cos(a));
+    // escolhe próximo waypoint se não tiver destino
+    if (ini.targetWaypointIdx === undefined) {
+        const adj = waypointAdj[ini.waypointIdx] ?? [];
+        if (adj.length === 0) { trocarClip(ini, ini.clipIdle); return; }
+        const nonBack = adj.filter(idx => idx !== ini.prevWaypointIdx);
+        const choices = nonBack.length > 0 ? nonBack : adj;
+        // prefere waypoints não ocupados por outro animatrónico
+        const livres = choices.filter(idx => !inimigos.some(o =>
+            o !== ini && o.ativo &&
+            (o.waypointIdx === idx || o.targetWaypointIdx === idx)
+        ));
+        const pool = livres.length > 0 ? livres : choices;
+        ini.targetWaypointIdx = pool[Math.floor(Math.random() * pool.length)];
+        ini._tempoParado = 0;
     }
-    ini.dirAtual.normalize();
 
-    const pos     = ini.modelo.position;
-    const angAtual = Math.atan2(ini.dirAtual.x, ini.dirAtual.z);
+    const tgt  = waypoints[ini.targetWaypointIdx];
+    const dx   = tgt.x - ini.modelo.position.x;
+    const dz   = tgt.z - ini.modelo.position.z;
+    const dist = Math.hypot(dx, dz);
 
-    // tenta continuar na direção atual se ainda não é hora de mudar
-    const novaFrente = pos.clone().addScaledVector(ini.dirAtual, passo);
-    const livreFrente = _posIniValida(novaFrente, MARGEM);
+    trocarClip(ini, ini.clipAndar || ini.clipIdle);
 
-    if (livreFrente && ini.tempoMudanca > 0) {
-        pos.copy(novaFrente);
-        pos.y = ini.spawnY;
-        _centrarNaZona(pos);
-        ini.modelo.rotation.y = angAtual;
-        trocarClip(ini, ini.clipAndar || ini.clipIdle);
+    // chegou
+    if (dist < 0.12) {
+        const fy = tgt.y + (ini.floorOffset ?? 0);
+        ini.modelo.position.x = tgt.x;
+        ini.modelo.position.z = tgt.z;
+        ini.modelo.position.y = fy;
+        ini.spawnY            = fy;
+        ini.prevWaypointIdx   = ini.waypointIdx;
+        ini.waypointIdx       = ini.targetWaypointIdx;
+        ini.targetWaypointIdx = undefined;
+        ini._tempoParado      = 0;
         return;
     }
 
-    // bloqueado ou tempo de mudar — seleciona nova direção
-    ini.tempoMudanca = 1.5 + Math.random() * 2.5;
+    // movimento suave: tenta diagonal, fallback por eixo (igual ao jogador)
+    const step = ini.velocidade * delta;
+    const s    = Math.min(dist, step);
+    const nx   = ini.modelo.position.x + (dx / dist) * s;
+    const nz   = ini.modelo.position.z + (dz / dist) * s;
 
-    const candidatos = [
-        { ang: angAtual,              peso: 3 }, // frente
-        { ang: angAtual + Math.PI/2,  peso: 2 }, // esquerda 90°
-        { ang: angAtual - Math.PI/2,  peso: 2 }, // direita 90°
-        { ang: angAtual + Math.PI,    peso: 1 }, // inversão (menos provável)
-    ];
-
-    const validos = candidatos.filter(c => {
-        const dir = new THREE.Vector3(Math.sin(c.ang), 0, Math.cos(c.ang));
-        const test = pos.clone().addScaledVector(dir, TESTE);
-        return _posIniValida(test, MARGEM);
-    });
-
-    if (validos.length > 0) {
-        const totalPeso = validos.reduce((s, c) => s + c.peso, 0);
-        let r = Math.random() * totalPeso;
-        let escolhido = validos[validos.length - 1];
-        for (const c of validos) { r -= c.peso; if (r <= 0) { escolhido = c; break; } }
-        ini.dirAtual.set(Math.sin(escolhido.ang), 0, Math.cos(escolhido.ang));
+    let moveu = false;
+    if (!_colideAnim(nx, nz)) {
+        ini.modelo.position.x = nx; ini.modelo.position.z = nz; moveu = true;
+    } else if (!_colideAnim(nx, ini.modelo.position.z)) {
+        ini.modelo.position.x = nx; moveu = true;
+    } else if (!_colideAnim(ini.modelo.position.x, nz)) {
+        ini.modelo.position.z = nz; moveu = true;
     }
 
-    // tenta mover com a nova direção
-    const novaNova = pos.clone().addScaledVector(ini.dirAtual, passo);
-    if (_posIniValida(novaNova, MARGEM)) {
-        pos.copy(novaNova);
-        pos.y = ini.spawnY;
-        _centrarNaZona(pos);
-        ini.modelo.rotation.y = Math.atan2(ini.dirAtual.x, ini.dirAtual.z);
-        trocarClip(ini, ini.clipAndar || ini.clipIdle);
+    // rotação: cardinal dominante (visual limpo, sem rotação diagonal brusca)
+    const absX = Math.abs(dx), absZ = Math.abs(dz);
+    if (absX >= absZ) ini.modelo.rotation.y = dx > 0 ? Math.PI / 2 : -Math.PI / 2;
+    else              ini.modelo.rotation.y = dz > 0 ? 0 : Math.PI;
+
+    // stuck: se parado > 3 s, escolhe novo destino
+    if (moveu) {
+        ini._tempoParado = 0;
     } else {
-        trocarClip(ini, ini.clipIdle);
+        ini._tempoParado = (ini._tempoParado || 0) + delta;
+        if (ini._tempoParado > 3.0) {
+            ini.targetWaypointIdx = undefined;
+            ini._tempoParado      = 0;
+        }
     }
+
+    ini.modelo.position.y = ini.spawnY;
 }
 
 function snapParaChaopaandar(ini) {
+    const off = ini.floorOffset ?? 0;
+
+    if (waypoints.length > 0) {
+        let nearestIdx = 0, nearestDist = Infinity;
+        waypoints.forEach((wp, i) => {
+            const d = Math.hypot(ini.spawnPos.x - wp.x, ini.spawnPos.z - wp.z);
+            if (d < nearestDist) { nearestDist = d; nearestIdx = i; }
+        });
+        const wp = waypoints[nearestIdx];
+        const fy = wp.y + off; // Y real do modelo = superfície + offset do origin
+        ini.modelo.position.set(wp.x, fy, wp.z);
+        ini.spawnY            = fy;
+        ini.waypointIdx       = nearestIdx;
+        ini.prevWaypointIdx   = nearestIdx;
+        ini.targetWaypointIdx = undefined;
+        ini.posicionado = true;
+        return;
+    }
+
+    // fallback: centro da zone mais próxima, Y sempre ao nível do chão principal
     let melhor = null, melhorDist = Infinity;
     zonasCaminhaveis.forEach(bb => {
         const cx = (bb.min.x + bb.max.x) / 2;
@@ -1130,9 +1277,9 @@ function snapParaChaopaandar(ini) {
         if (d < melhorDist) { melhorDist = d; melhor = { cx, cz }; }
     });
     if (melhor) {
-        ini.modelo.position.x = melhor.cx;
-        ini.modelo.position.z = melhor.cz;
-        ini.modelo.position.y = ini.spawnY;
+        const fy = _waypointFloorY + off; // força Y ao chão, não ao topo do palco
+        ini.modelo.position.set(melhor.cx, fy, melhor.cz);
+        ini.spawnY = fy;
     }
     ini.posicionado = true;
 }
@@ -1145,32 +1292,64 @@ function atualizarCoracaoProximidade() {
         const d = Math.hypot(ini.modelo.position.x - playerPos.x, ini.modelo.position.z - playerPos.z);
         if (d < minDist) minDist = d;
     });
-    if (minDist === Infinity) { setCoracaoFactor(1.0); return; }
-    // factor: 1.0 a distancia 20+, ate 2.5 a distancia 3 ou menos
-    const t = 1 - Math.min(1, Math.max(0, (minDist - 3) / 17));
-    setCoracaoFactor(1.0 + t * 1.5);
+    if (minDist === Infinity) { setCoracaoFactor(1.3); return; }
+    // factor: 1.3 (base sem inimigos) a distancia 15+, até 4.0 a distancia 2 ou menos
+    const t = 1 - Math.min(1, Math.max(0, (minDist - 2) / 13));
+    setCoracaoFactor(1.3 + t * 2.7);
+}
+
+function _prepararAtivacoes() {
+    // ordem aleatória dos 4 personagens
+    const pool = ['freddy', 'bonnie', 'chica', 'foxy']
+        .sort(() => Math.random() - 0.5);
+
+    const atraso1 = 5 + Math.random() * 5; // 5–10 s após phoneguy
+
+    if (dificuldadeAtual === 'facil') {
+        _pendingActivations = [
+            { nome: pool[0], fired: false,
+              check: () => phoneguyTerminou && tempoAposPhoneguy >= atraso1 },
+            { nome: pool[1], fired: false,
+              check: () => totalTokens > 0 && tokensApanhados > totalTokens * 0.5 },
+        ];
+    } else if (dificuldadeAtual === 'normal') {
+        _pendingActivations = [
+            { nome: pool[0], fired: false,
+              check: () => phoneguyTerminou && tempoAposPhoneguy >= atraso1 },
+            { nome: pool[1], fired: false,
+              check: () => totalTokens > 0 && tokensApanhados >= Math.floor(totalTokens * 0.4) },
+            { nome: pool[2], fired: false,
+              check: () => totalTokens > 0 && tokensApanhados >= Math.floor(totalTokens * 0.75) },
+        ];
+    }
+    // dificil: a configurar depois (inclui golden freddy)
 }
 
 function atualizarInimigos(delta) {
     if (!jogoIniciado) return;
 
-    // ativaçao desligada por enquanto — ajustar posições primeiro
-    // if (tempoJogo >  5 && !alertas.freddy) ativarInimigo('freddy');
-    // if (tempoJogo > 15 && !alertas.bonnie) ativarInimigo('bonnie');
-    // if (tempoJogo > 25 && !alertas.chica)  ativarInimigo('chica');
-    // if (tokensApanhados >= 5 && !alertas.foxy) ativarInimigo('foxy');
+    if (phoneguyTerminou) tempoAposPhoneguy += delta;
+
+    // prepara activações uma vez quando o jogo e tokens estão prontos
+    if (!_ativacoesPreparadas && totalTokens > 0) {
+        _prepararAtivacoes();
+        _ativacoesPreparadas = true;
+    }
+
+    // dispara activações pendentes
+    _pendingActivations.forEach(pa => {
+        if (pa.fired || alertas[pa.nome]) return;
+        if (pa.check()) { pa.fired = true; ativarInimigo(pa.nome); }
+    });
 
     inimigos.forEach(ini => {
         if (!ini.ativo) return; // snap só acontece em ativarInimigo()
 
-        // weeping angel: Freddy e Foxy ficam parados quando o jogador olha para eles
-        const temAngelMechanic = ini.nome === 'freddy' || ini.nome === 'foxy';
-        if (temAngelMechanic && _jogadorOlha(ini)) {
-            trocarClip(ini, ini.clipIdle);
-            return;
-        }
+        // weeping angel: desativado temporariamente para teste de movimento
+        // const temAngelMechanic = ini.nome === 'freddy' || ini.nome === 'foxy';
+        // if (temAngelMechanic && _jogadorOlha(ini)) { trocarClip(ini, ini.clipIdle); return; }
 
-        moverInimigoRandom(ini, delta);
+        moverInimigoWaypoint(ini, delta);
 
         // captura do jogador — desativado para teste de movimento
         // const d2 = Math.hypot(
@@ -1213,7 +1392,10 @@ function mostrarMensagemInicio() {
         setTimeout(() => {
             el.remove();
             mensagemInicioAtiva = false;
-            tocar('phoneguy'); // inicia o phone guy so quando o aviso desaparece
+            tocar('phoneguy');
+            tocar('coracao');
+            tocar('luzFlicker');
+            aoPhoneguyTerminar(() => { phoneguyTerminou = true; });
         }, 1600);
     }, 2500);
 }
@@ -1262,12 +1444,13 @@ function ativarInimigo(nome) {
     if (zonasCaminhaveis.length > 0) snapParaChaopaandar(ini);
     ini.ativo = true;
 
-    // troca para clip de andar se existir
-    if (ini.clipAndar && ini.acaoAtual) {
+    // troca para clip de andar com o timeScale correto
+    const clipMove = ini.clipAndar || ini.clipIdle;
+    if (clipMove && ini.acaoAtual) {
         ini.acaoAtual.stop();
-        ini.acaoAtual = ini.mixer.clipAction(ini.clipAndar);
+        ini.acaoAtual = ini.mixer.clipAction(clipMove);
+        ini.acaoAtual.timeScale = ini.walkTimeScale ?? 1.0;
         ini.acaoAtual.play();
-        // walkYOffset compensa a diferença de root bone Y entre idle e andar
         if (ini.walkYOffset) {
             ini.spawnY += ini.walkYOffset;
             ini.modelo.position.y = ini.spawnY;
