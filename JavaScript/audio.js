@@ -26,6 +26,7 @@ function _add(id, src, tipo, loop = false, boost = 1.0) {
 }
 
 _add('menuTema',   './sounds/musica/menu_tema.mp3',      'musica', true,  0.62 );
+_add('6am',        './sounds/musica/6am_alert.mp3',     'musica', false, 1.0  );
 _add('coracao',    './sounds/ambiente/coracao.wav',       'geral',  true,  1.0  );
 _add('luzFlicker', './sounds/ambiente/luz_flicker.mp3',  'geral',  true,  0.12 ); // fundo, muito ligeiro
 _add('hoverBotao', './sounds/sfx/hover_botao.mp3',       'sfx',    false, 0.3  );
@@ -36,7 +37,12 @@ _add('passosAnim',       './sounds/sfx/passos_anim.mp3',            'sfx',    fa
 _add('passosDuto',       './sounds/sfx/passos_duto.mp3',            'sfx',    false);
 _add('passosJogo',       './sounds/sfx/passos_jogo.mp3',            'sfx',    true,  12.0 );
 _add('passosHeavy',      './sounds/sfx/passos_heavy.mp3',           'sfx',    true,  8.0  );
-_add('token',            './sounds/sfx/token.wav',                  'sfx',    false);
+_add('token',              './sounds/sfx/token.wav',                'sfx',    false);
+_add('jumpscare_freddy', './sounds/jumpscare/freddy.mp3',           'sfx',    false, 1.0  );
+_add('jumpscare_bonnie', './sounds/jumpscare/bonnie.mp3',           'sfx',    false, 1.0  );
+_add('jumpscare_chica',  './sounds/jumpscare/chica.mp3',            'sfx',    false, 1.0  );
+_add('jumpscare_foxy',   './sounds/jumpscare/foxy.mp3',             'sfx',    false, 1.4  );
+_add('jumpscare_golden', './sounds/jumpscare/golden.mp3',           'sfx',    false, 1.0  );
 
 function _vol(s) {
     const g = CONFIG.volumeGeral;
@@ -78,8 +84,8 @@ export function setCoracaoFactor(f) {
     const s = _reg['coracao'];
     if (!s) return;
     s.a.volume       = Math.min(1, _vol(s) * _coracaoFactor);
-    // acelera com a proximidade: 1.0 base → até 2.8x mais rápido ao máximo factor
-    s.a.playbackRate = Math.min(2.8, 1.0 + (_coracaoFactor - 1.0) * 0.55);
+    // acelera com a proximidade: 1.4 base → até 3.2x mais rápido ao máximo factor
+    s.a.playbackRate = Math.min(3.2, 1.4 + (_coracaoFactor - 1.0) * 0.6);
 }
 
 // pausa sons ambientais/música quando abre opções ou pausa
@@ -116,5 +122,10 @@ export function atualizarVolumes() {
 
 export function aoPhoneguyTerminar(cb) {
     const s = _reg['phoneguy'];
+    if (s) s.a.addEventListener('ended', cb, { once: true });
+}
+
+export function aoTerminar(id, cb) {
+    const s = _reg[id];
     if (s) s.a.addEventListener('ended', cb, { once: true });
 }

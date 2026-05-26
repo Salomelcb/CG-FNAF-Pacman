@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { tocar, parar, estaATocando, setCoracaoFactor, atualizarPhoneguyDistancia, aoPhoneguyTerminar } from './audio.js';
+import { tocar, parar, estaATocando, setCoracaoFactor, atualizarPhoneguyDistancia, aoPhoneguyTerminar, aoTerminar } from './audio.js';
 import { mostrarPausa, esconderPausa, estaPausado, configurarCallbacks } from './opcoes.js';
 
 const loader = new GLTFLoader();
@@ -47,13 +47,16 @@ let inimigos = [];
 //   acaoAtual, spawnPos, velocidade, ativo, emMovimento }
 
 // posicoes de spawn (Y preenchido depois de saber o floor)
-const SPAWN_FREDDY = new THREE.Vector3( 0.0, 0, -36);
-const SPAWN_BONNIE = new THREE.Vector3(-4.0, 0, -36);
-const SPAWN_CHICA  = new THREE.Vector3( 4.0, 0, -36);
-const SPAWN_FOXY   = new THREE.Vector3(-9.0, 0, -26);
+const SPAWN_FREDDY  = new THREE.Vector3( 0.0, 0, -36);
+const SPAWN_BONNIE  = new THREE.Vector3(-4.0, 0, -36);
+const SPAWN_CHICA   = new THREE.Vector3( 4.0, 0, -36);
+const SPAWN_FOXY    = new THREE.Vector3(-9.0, 0, -26);
+const SPAWN_GOLDEN  = new THREE.Vector3( 0.0, 0, -36);
 
 // ─── ESTADO DO JOGO ────────────────────────────────────────────────
 let mensagemInicioAtiva = false;
+let jogoTerminado  = false;
+let jogoGanho      = false;
 const OFFICE_XZ = new THREE.Vector2(0, 2);
 let tempoJogo       = 0;
 let jogoIniciado    = false;
@@ -65,6 +68,19 @@ let phoneguyTerminou    = false;
 let tempoAposPhoneguy   = 0;
 let _pendingActivations = [];   // [{ nome, check: () => bool, fired }]
 let _ativacoesPreparadas = false;
+let _tempoUltimaAtivacao = -Infinity; // cooldown entre ativações
+const COOLDOWN_ATIVACAO  = 15;        // segundos mínimos entre ativações
+
+// Golden Freddy (modo difícil)
+let _goldenIniciado     = false;
+let _goldenCapturou     = false;   // apanhou o jogador — desaparece após isso
+let _goldenFase         = 0;       // 0=à espera, 1=1ª posição (aleatória), 2=2ª posição (perto do escritório)
+let _goldenTempoVisivel = 0;       // conta-abaixo enquanto visível (fase 1)
+let _goldenCooldown     = Infinity; // conta-abaixo até próxima teleporte — só avança quando jogo ativo
+let _goldenLuz          = null;    // PointLight dentro do modelo
+let _goldenFeetAdj      = 0;       // offset pré-calculado: origin → pés (evita calcMinY por teleporte)
+let _debuffAtivo        = false;
+let _debuffOverlay      = null;
 
 // intro camera (sair do duto para o escritorio)
 let introCamera             = false;
@@ -293,7 +309,7 @@ export function iniciarJogo(renderer, dificuldade = 'facil') {
 
         // gestao do jogo — so depois do accordar e intro
         if (!acordando && !introCamera) {
-            if (!jogoIniciado) {
+            if (!jogoIniciado && !jogoTerminado) {
                 jogoIniciado = true;
                 mostrarMensagemInicio();
             }
@@ -332,6 +348,11 @@ export function iniciarJogo(renderer, dificuldade = 'facil') {
             atualizarInimigos(delta);
             atualizarCoracaoProximidade();
             atualizarPhoneguyDistancia(Math.hypot(playerPos.x - OFFICE_XZ.x, playerPos.z - OFFICE_XZ.y));
+            // verificar vitoria: todos os tokens + chegou ao escritorio
+            if (!jogoGanho && tokensApanhados >= totalTokens && totalTokens > 0) {
+                const distOffice = Math.hypot(playerPos.x - OFFICE_XZ.x, playerPos.z - OFFICE_XZ.y);
+                if (distOffice < 3.0) _ganharJogo();
+            }
             atualizarCamera();
         }
         atualizarTokens();
@@ -380,7 +401,7 @@ function atualizarMovimento(delta) {
 
     const dir    = new THREE.Vector3(Math.sin(playerAngle), 0, Math.cos(playerAngle));
     const aAndar = keys['KeyW'] || keys['ArrowUp'];
-    if (aAndar) tentarMover(dir, MOVE_SPEED * delta);
+    if (aAndar) tentarMover(dir, (_debuffAtivo ? MOVE_SPEED * 0.5 : MOVE_SPEED) * delta);
 
     // passos só quando se anda
     if (aAndar && !estaATocando('passosHeavy')) tocar('passosHeavy');
@@ -392,6 +413,7 @@ function atualizarMovimento(delta) {
             cenaJogo.remove(t);
             tokensApanhados++;
             tocar('token');
+            if (tokensApanhados >= totalTokens) _alertaCorrida();
             return false;
         }
         return true;
@@ -425,15 +447,16 @@ function atualizarCamera() {
 
 function atualizarLuzesFlicker(tempo) {
     luzesFlicker.forEach(item => {
+        const fator = item.fator ?? 1;
         if (item.estragada) {
             // luz estragada: pisca irregularmente
             const n = Math.sin(tempo * 11.3 + item.fase) * Math.sin(tempo * 17.7 + item.fase * 1.3);
-            item.luz.intensity = n > 0.2 ? 1.6 + n * 0.4 : (n > -0.1 ? 0.2 : 0);
+            item.luz.intensity = (n > 0.2 ? 1.6 + n * 0.4 : (n > -0.1 ? 0.2 : 0)) * fator;
         } else {
             // luz estavel com raros glitches
             const base = 1.1 + Math.sin(tempo * 1.2 + item.fase) * 0.08;
             const glitch = Math.random() > 0.996 ? -0.8 : 0;
-            item.luz.intensity = Math.max(0, base + glitch);
+            item.luz.intensity = Math.max(0, base + glitch) * fator;
         }
     });
 }
@@ -695,11 +718,10 @@ function atualizarMinimapa() {
         ctxMapa.beginPath(); ctxMapa.arc(tx, ty, 3, 0, Math.PI*2); ctxMapa.fill();
     });
 
-    // inimigos — ponto vermelho + letra inicial
-    // spawned: posição do modelo tem offsets de geometria → corrigir
-    // ativo (waypoint): posição exata → sem correção
+    // inimigos — ponto vermelho + letra inicial (golden nunca aparece no minimapa)
     const _chicaOff = spawnPalco ? (spawnPalco.bb.max.x - spawnPalco.bb.min.x) * 0.20 : 1.7;
     inimigos.forEach(ini => {
+        if (ini.nome === 'golden') return;
         const ip = ini.modelo.position;
         let vizX = ip.x, vizZ = ip.z;
         if (!ini.ativo) {
@@ -768,34 +790,221 @@ function _mostrarTelaSair() {
     }, 3000);
 }
 
-function jogoOver(nomeInimigo) {
-    // evitar multiplos triggers
-    inimigos.forEach(i => { i.ativo = false; });
-    jogoIniciado = false;
+const JUMPSCARE_GIFS = {
+    freddy: './images/jumpscares/freddyimgif.gif',
+    bonnie: './images/jumpscares/bonnieimg.webp',
+    chica:  './images/jumpscares/chicaimg.png',
+    foxy:   './images/jumpscares/foxyimggif.gif',
+    golden: './images/jumpscares/goldenfreddyimg.jpeg',
+};
 
-    const el = document.createElement('div');
-    Object.assign(el.style, {
+let _jogoOverDisparado = false;
+function jogoOver(nomeInimigo) {
+    if (_jogoOverDisparado) return;
+    _jogoOverDisparado = true;
+    jogoTerminado = true;
+    jogoIniciado  = false;
+
+    inimigos.forEach(i => { i.ativo = false; });
+    parar('coracao'); parar('luzFlicker'); parar('phoneguy'); parar('passosJogo'); parar('passosHeavy');
+    tocar(`jumpscare_${nomeInimigo}`);
+
+    const gifSrc = JUMPSCARE_GIFS[nomeInimigo];
+
+    // fundo preto aparece imediatamente; gif por cima proporcional (contain)
+    const overlay = document.createElement('div');
+    Object.assign(overlay.style, {
         position: 'fixed', inset: '0', zIndex: '60',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: '#000', pointerEvents: 'none'
+    });
+    if (gifSrc) {
+        const img = document.createElement('img');
+        img.src = gifSrc;
+        Object.assign(img.style, {
+            width: '100vw', height: '100vh',
+            objectFit: 'contain', display: 'block'
+        });
+        overlay.appendChild(img);
+    }
+    document.body.appendChild(overlay);
+
+    // duração: Foxy → espera o áudio acabar; outros → 5s fixos
+    // o overlay (fundo preto) NUNCA é removido — evita flash do cenário
+    function _mostrarGameOver() {
+        // esconde o gif mas mantém o fundo preto
+        const img = overlay.querySelector('img');
+        if (img) {
+            img.style.transition = 'opacity 0.3s ease';
+            img.style.opacity = '0';
+            setTimeout(() => img.remove(), 300);
+        }
+        setTimeout(() => _preencherGameOver(overlay, nomeInimigo), 350);
+    }
+
+    if (nomeInimigo === 'foxy') {
+        aoTerminar(`jumpscare_${nomeInimigo}`, _mostrarGameOver);
+    } else {
+        setTimeout(_mostrarGameOver, 5000);
+    }
+}
+
+function _ganharJogo() {
+    jogoGanho     = true;
+    jogoTerminado = true;
+    jogoIniciado  = false;
+    inimigos.forEach(i => { i.ativo = false; });
+    parar('coracao'); parar('luzFlicker'); parar('phoneguy'); parar('passosJogo'); parar('passosHeavy');
+
+    // apagar luzes gradualmente
+    const duracaoFade = 1800; // ms
+    const inicio = performance.now();
+    const luzInicial = luzAmbiente ? luzAmbiente.intensity : 0;
+    const fadeId = setInterval(() => {
+        const t = Math.min(1, (performance.now() - inicio) / duracaoFade);
+        if (luzAmbiente)  luzAmbiente.intensity  = luzInicial * (1 - t);
+        if (lanterna)     lanterna.intensity      = 60 * (1 - t);
+        if (t >= 1) clearInterval(fadeId);
+    }, 16);
+
+    // após fade das luzes → mostrar relógio
+    setTimeout(() => {
+        _mostrarRelogio();
+    }, duracaoFade + 200);
+}
+
+function _mostrarRelogio() {
+    const overlay = document.createElement('div');
+    Object.assign(overlay.style, {
+        position: 'fixed', inset: '0', zIndex: '70',
         display: 'flex', flexDirection: 'column',
         alignItems: 'center', justifyContent: 'center',
-        background: 'rgba(0,0,0,0)',
-        fontFamily: "'Courier New', monospace",
-        color: '#ff2222', textAlign: 'center',
-        transition: 'background 1.2s ease', pointerEvents: 'none'
+        background: '#000', fontFamily: "'Courier New', monospace",
+        textAlign: 'center', pointerEvents: 'none',
+        opacity: '0', transition: 'opacity 0.6s ease'
+    });
+
+    const hora = document.createElement('div');
+    hora.textContent = '5:59 AM';
+    Object.assign(hora.style, {
+        fontSize: 'clamp(3em,10vw,7em)',
+        letterSpacing: '12px', color: '#cccccc',
+        textShadow: '0 0 40px #ffffff88'
+    });
+
+    const sub = document.createElement('div');
+    sub.textContent = 'ALMOST THERE...';
+    Object.assign(sub.style, {
+        fontSize: 'clamp(0.7em,1.5vw,1em)',
+        letterSpacing: '6px', color: '#555',
+        marginTop: '16px'
+    });
+
+    overlay.appendChild(hora);
+    overlay.appendChild(sub);
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => { overlay.style.opacity = '1'; });
+
+    // ao fim de 1.5s → muda para 6:00 AM com o audio
+    setTimeout(() => {
+        tocar('6am');
+        hora.style.transition = 'color 0.3s ease, text-shadow 0.3s ease';
+        hora.style.color       = '#ffcc00';
+        hora.style.textShadow  = '0 0 60px #ffcc0088';
+        hora.textContent = '6:00 AM';
+        sub.style.transition   = 'color 0.5s ease';
+        sub.style.color        = '#ffcc00';
+        sub.textContent        = '6 AM';
+
+        // após 3s → ecrã de vitória
+        setTimeout(() => {
+            overlay.remove();
+            _criarEcraVitoria();
+        }, 3000);
+    }, 1500);
+}
+
+function _criarEcraVitoria() {
+    const el = document.createElement('div');
+    Object.assign(el.style, {
+        position: 'fixed', inset: '0', zIndex: '70',
+        display: 'flex', flexDirection: 'column',
+        alignItems: 'center', justifyContent: 'center',
+        background: '#000', fontFamily: "'Courier New', monospace",
+        textAlign: 'center', pointerEvents: 'auto'
     });
     el.innerHTML = `
-        <div style="font-size:clamp(2em,5vw,3.5em);letter-spacing:10px;
-             text-shadow:0 0 30px #ff0000;opacity:0;transition:opacity 0.8s ease 1s">GAME OVER</div>
-        <div style="font-size:clamp(0.8em,1.4vw,1em);letter-spacing:4px;
-             color:#888;margin-top:18px;opacity:0;transition:opacity 0.8s ease 1.3s">apanhado pelo ${nomeInimigo.toUpperCase()}</div>
+        <div style="font-size:clamp(1.4em,2.8vw,2em);letter-spacing:6px;color:#ffcc00;
+             margin-bottom:20px;opacity:0;transition:opacity 0.8s ease 0.1s">
+            FREDDY FAZBEAR'S PIZZA
+        </div>
+        <div style="font-size:clamp(2em,5vw,3.2em);letter-spacing:10px;color:#ccffcc;
+             text-shadow:0 0 30px #88ff88;opacity:0;transition:opacity 0.8s ease 0.3s">
+            YOU SURVIVED
+        </div>
+        <div style="font-size:clamp(0.8em,1.4vw,1em);letter-spacing:4px;color:#888;
+             margin-top:16px;opacity:0;transition:opacity 0.8s ease 0.5s">
+            todos os tokens recolhidos
+        </div>
+        <button id="btn-menu-vitoria" style="
+             margin-top:40px;padding:12px 36px;
+             font-family:'Courier New',monospace;font-size:clamp(0.8em,1.3vw,1em);
+             letter-spacing:5px;color:#cccccc;background:transparent;
+             border:1px solid #555;cursor:pointer;
+             opacity:0;transition:opacity 0.8s ease 0.8s, border-color 0.2s, color 0.2s">
+            VOLTAR AO MENU
+        </button>
     `;
     document.body.appendChild(el);
     requestAnimationFrame(() => {
-        el.style.background = 'rgba(0,0,0,1)';
-        setTimeout(() => {
-            el.querySelectorAll('div').forEach(d => { d.style.opacity = '1'; });
-        }, 100);
+        el.querySelectorAll('div, button').forEach(d => { d.style.opacity = '1'; });
     });
+    const btn = el.querySelector('#btn-menu-vitoria');
+    btn.addEventListener('mouseenter', () => { btn.style.borderColor = '#ffcc00'; btn.style.color = '#ffcc00'; });
+    btn.addEventListener('mouseleave', () => { btn.style.borderColor = '#555';    btn.style.color = '#cccccc'; });
+    btn.addEventListener('click', () => { window.location.reload(); });
+}
+
+function _preencherGameOver(overlay, nomeInimigo) {
+    // reutiliza o overlay (fundo preto já presente) — sem flash do cenário
+    overlay.style.flexDirection = 'column';
+    overlay.style.pointerEvents = 'auto';
+    const el = document.createElement('div');
+    Object.assign(el.style, {
+        display: 'flex', flexDirection: 'column',
+        alignItems: 'center', justifyContent: 'center',
+        width: '100%'
+    });
+    el.innerHTML = `
+        <div style="font-size:clamp(1.4em,2.8vw,2em);letter-spacing:6px;color:#ffcc00;
+             margin-bottom:20px;opacity:0;transition:opacity 0.8s ease 0.1s">
+            FREDDY FAZBEAR'S PIZZA
+        </div>
+        <div style="font-size:clamp(2em,5vw,3.2em);letter-spacing:10px;color:#ff2222;
+             text-shadow:0 0 30px #ff0000;opacity:0;transition:opacity 0.8s ease 0.3s">
+            GAME OVER
+        </div>
+        <div style="font-size:clamp(0.8em,1.4vw,1em);letter-spacing:4px;color:#cccccc;
+             margin-top:16px;opacity:0;transition:opacity 0.8s ease 0.5s">
+            apanhado pelo ${nomeInimigo.toUpperCase()}
+        </div>
+        <button id="btn-menu-gameover" style="
+             margin-top:40px;padding:12px 36px;
+             font-family:'Courier New',monospace;font-size:clamp(0.8em,1.3vw,1em);
+             letter-spacing:5px;color:#cccccc;background:transparent;
+             border:1px solid #555;cursor:pointer;
+             opacity:0;transition:opacity 0.8s ease 0.8s, border-color 0.2s, color 0.2s">
+            VOLTAR AO MENU
+        </button>
+    `;
+    overlay.appendChild(el);
+    requestAnimationFrame(() => {
+        el.querySelectorAll('div, button').forEach(d => { d.style.opacity = '1'; });
+    });
+    const btn = el.querySelector('#btn-menu-gameover');
+    btn.addEventListener('mouseenter', () => { btn.style.borderColor = '#ffcc00'; btn.style.color = '#ffcc00'; });
+    btn.addEventListener('mouseleave', () => { btn.style.borderColor = '#555';    btn.style.color = '#cccccc'; });
+    btn.addEventListener('click', () => { window.location.reload(); });
 }
 
 function criarHUD() {
@@ -910,18 +1119,26 @@ function carregarPersonagens(floorY) {
             SPAWN_FOXY.set(cx + off * 2, topY + 1.95, cz + 3.5);
         }
 
-        // luz suave para iluminar BasicMaterial (Bonnie) sem lavar texturas
-        const luzPalco = new THREE.PointLight(0xfff5ee, 2, 35);
-        luzPalco.position.set(cx, topY + 8, cz);
+        SPAWN_GOLDEN.set(cx, topY + 1.95, cz);
+
+        // holofote estragado do palco — inclinado de frente para trás a apanhar os 3
+        const luzPalco = new THREE.SpotLight(0xffe8aa, 2.0, 50, 0.65, 0.45, 1.4);
+        luzPalco.position.set(cx, topY + 10, cz + 6);
+        const alvoLuzPalco = new THREE.Object3D();
+        alvoLuzPalco.position.set(cx, topY + 1, cz + 1.5);
+        cenaJogo.add(alvoLuzPalco);
+        luzPalco.target = alvoLuzPalco;
         cenaJogo.add(luzPalco);
+        luzesFlicker.push({ luz: luzPalco, fase: Math.random() * Math.PI * 2, estragada: true, fator: 2.8 });
     } else {
         SPAWN_FREDDY.set( 0.0, floorY + 0.2, -39);
         SPAWN_BONNIE.set(-2.5, floorY + 0.2, -39);
         SPAWN_CHICA.set(  2.5, floorY + 0.0, -39);
         SPAWN_FOXY.set(   5.0, floorY + 0.2, -39);
+        SPAWN_GOLDEN.set( 0.0, floorY + 0.2, -39);
     }
 
-    const ESC = { freddy: 1.15, bonnie: 2.65, chica: 0.035, foxy: 1.15 };
+    const ESC = { freddy: 1.15, bonnie: 2.65, chica: 0.035, foxy: 1.15, golden: 0.035 };
 
     function loadChar(path, spawn, rotY, velocidade, escala, nome, clipNome, timeScale = 1.0, walkYOffset = 0, clipAndarNome = null, walkTimeScale = 1.0, forcedFloorOffset = undefined) {
         loader.load(path, gltf => {
@@ -934,6 +1151,8 @@ function carregarPersonagens(floorY) {
             modelo.updateMatrixWorld(true);
             const _geomMinY = calcMinY(modelo);
             console.log(`[${nome}] spawn.y:`, spawn.y.toFixed(2), '| geomMinY:', _geomMinY.toFixed(2), '| diff:', (spawn.y - _geomMinY).toFixed(2));
+            // golden: guarda offset pés→origin uma vez para não recalcular por teleporte
+            if (nome === 'golden') _goldenFeetAdj = spawn.y - _geomMinY;
             modelo.rotation.y = rotY;
 
             // emissive + desativar frustum culling (evita que bones animados escondam o modelo)
@@ -942,10 +1161,31 @@ function carregarPersonagens(floorY) {
                 o.frustumCulled = false;
                 const mats = Array.isArray(o.material) ? o.material : [o.material];
                 mats.forEach(m => {
-                    if (m.emissive) { m.emissive.set(0x0f0c0c); m.emissiveIntensity = 0.5; }
+                    if (nome === 'golden') {
+                        // empurra cor para dourado — reduz verde e azul, aumenta vermelho
+                        if (m.color) {
+                            m.color.r = Math.min(1, m.color.r * 1.3);
+                            m.color.g = m.color.g * 0.50;
+                            m.color.b = m.color.b * 0.08;
+                        }
+                        if (m.emissive) { m.emissive.set(0x4a2800); m.emissiveIntensity = 0.9; }
+                        // roughness alto evita reflexos verdes especulares
+                        if ('roughness' in m) m.roughness = Math.min(1, (m.roughness ?? 0.8) + 0.3);
+                        if ('metalness' in m) m.metalness = 0;
+                    } else {
+                        if (m.emissive) { m.emissive.set(0x0f0c0c); m.emissiveIntensity = 0.5; }
+                    }
                     m.needsUpdate = true;
                 });
             });
+
+            // Golden Freddy: luz de brilho âmbar + começa invisível
+            if (nome === 'golden') {
+                _goldenLuz = new THREE.PointLight(0xffaa33, 0, 9);
+                _goldenLuz.position.set(0, 2, 0);
+                modelo.add(_goldenLuz);
+                modelo.visible = false;
+            }
 
             // remove scale tracks
             gltf.animations.forEach(clip => {
@@ -1026,10 +1266,18 @@ function carregarPersonagens(floorY) {
     }
 
     //                 path                          spawn         rotY  vel   esc         nome      clipIdle                       tS   wYOff  clipAndar                      walkTS  forcedFloorOffset
-    loadChar('./Models/Personagens/freddy_ar.glb', SPAWN_FREDDY,  0,    1.8, ESC.freddy, 'freddy', 'Freddy--Idle',                1.0, 0,    'Freddy--Charge',              0.35,   -1.1);
-    loadChar('./Models/Personagens/bonnie.glb',    SPAWN_BONNIE,  0.25, 2.0, ESC.bonnie, 'bonnie', 'Bonnie--Idle',                1.0, 0,    'Bonnie--walk',                1.0 );
-    loadChar('./Models/Personagens/chica.glb',     SPAWN_CHICA,   0,    1.9, ESC.chica,  'chica',  'chica_rings_skeleton|idle',   1.0, 0,    'chica_rings_skeleton|walk',   1.0 );
-    loadChar('./Models/Personagens/foxy_ar.glb',   SPAWN_FOXY,    0,    3.0, ESC.foxy,   'foxy',   'Foxy--Idle',                  1.0, 0,    'Foxy--Charge',                0.35);
+    if (dificuldadeAtual === 'dificil') {
+        loadChar('./Models/Personagens/goldenfreddy.glb', SPAWN_GOLDEN, 0, 0,   ESC.golden, 'golden', null,                          1.0, 0, null,                          1.0       );
+        loadChar('./Models/Personagens/freddy_ar.glb',    SPAWN_FREDDY, 0, 1.8, ESC.freddy, 'freddy', 'Freddy--Idle',                1.0, 0, 'Freddy--Charge',              0.35, -1.1);
+        loadChar('./Models/Personagens/bonnie.glb',       SPAWN_BONNIE, 0.25, 2.0, ESC.bonnie, 'bonnie', 'Bonnie--Idle',             1.0, 0, 'Bonnie--walk',                1.0       );
+        loadChar('./Models/Personagens/chica.glb',        SPAWN_CHICA,  0, 1.9, ESC.chica,  'chica',  'chica_rings_skeleton|idle',   1.0, 0, 'chica_rings_skeleton|walk',   1.0       );
+        loadChar('./Models/Personagens/foxy_ar.glb',      SPAWN_FOXY,   0, 3.0, ESC.foxy,   'foxy',   'Foxy--Idle',                  1.0, 0, 'Foxy--Charge',                0.35      );
+    } else {
+        loadChar('./Models/Personagens/freddy_ar.glb', SPAWN_FREDDY,  0,    1.8, ESC.freddy, 'freddy', 'Freddy--Idle',                1.0, 0,    'Freddy--Charge',              0.35,   -1.1);
+        loadChar('./Models/Personagens/bonnie.glb',    SPAWN_BONNIE,  0.25, 2.0, ESC.bonnie, 'bonnie', 'Bonnie--Idle',                1.0, 0,    'Bonnie--walk',                1.0 );
+        loadChar('./Models/Personagens/chica.glb',     SPAWN_CHICA,   0,    1.9, ESC.chica,  'chica',  'chica_rings_skeleton|idle',   1.0, 0,    'chica_rings_skeleton|walk',   1.0 );
+        loadChar('./Models/Personagens/foxy_ar.glb',   SPAWN_FOXY,    0,    3.0, ESC.foxy,   'foxy',   'Foxy--Idle',                  1.0, 0,    'Foxy--Charge',                0.35);
+    }
 }
 
 // ─── WAYPOINTS ─────────────────────────────────────────────────────
@@ -1183,11 +1431,25 @@ function moverInimigoWaypoint(ini, delta) {
         if (adj.length === 0) { trocarClip(ini, ini.clipIdle); return; }
         const nonBack = adj.filter(idx => idx !== ini.prevWaypointIdx);
         const choices = nonBack.length > 0 ? nonBack : adj;
-        // prefere waypoints não ocupados por outro animatrónico
-        const livres = choices.filter(idx => !inimigos.some(o =>
-            o !== ini && o.ativo &&
-            (o.waypointIdx === idx || o.targetWaypointIdx === idx)
-        ));
+        // prefere waypoints não ocupados por outro animatrónico nem perto do Golden
+        const golden = inimigos.find(o => o.nome === 'golden' && o.ativo);
+        const livres = choices.filter(idx => {
+            if (inimigos.some(o => o !== ini && o.ativo && o.nome !== 'golden' &&
+                (o.waypointIdx === idx || o.targetWaypointIdx === idx))) return false;
+            if (golden) {
+                const wp = waypoints[idx];
+                // exclui waypoints perto do Golden
+                if (Math.hypot(wp.x - golden.modelo.position.x, wp.z - golden.modelo.position.z) < 2.0) return false;
+                // exclui waypoints cujo percurso passa pelo Golden
+                const cx = ini.modelo.position.x, cz = ini.modelo.position.z;
+                for (let s = 1; s <= 6; s++) {
+                    const t = s / 6;
+                    if (Math.hypot(cx + (wp.x - cx) * t - golden.modelo.position.x,
+                                   cz + (wp.z - cz) * t - golden.modelo.position.z) < 1.5) return false;
+                }
+            }
+            return true;
+        });
         const pool = livres.length > 0 ? livres : choices;
         ini.targetWaypointIdx = pool[Math.floor(Math.random() * pool.length)];
         ini._tempoParado = 0;
@@ -1220,12 +1482,17 @@ function moverInimigoWaypoint(ini, delta) {
     const nx   = ini.modelo.position.x + (dx / dist) * s;
     const nz   = ini.modelo.position.z + (dz / dist) * s;
 
+    const _gCol = inimigos.find(o => o.nome === 'golden' && o.ativo);
+    const _bloqGolden = (x, z) => _gCol
+        ? Math.hypot(x - _gCol.modelo.position.x, z - _gCol.modelo.position.z) < 1.2
+        : false;
+
     let moveu = false;
-    if (!_colideAnim(nx, nz)) {
+    if (!_colideAnim(nx, nz) && !_bloqGolden(nx, nz)) {
         ini.modelo.position.x = nx; ini.modelo.position.z = nz; moveu = true;
-    } else if (!_colideAnim(nx, ini.modelo.position.z)) {
+    } else if (!_colideAnim(nx, ini.modelo.position.z) && !_bloqGolden(nx, ini.modelo.position.z)) {
         ini.modelo.position.x = nx; moveu = true;
-    } else if (!_colideAnim(ini.modelo.position.x, nz)) {
+    } else if (!_colideAnim(ini.modelo.position.x, nz) && !_bloqGolden(ini.modelo.position.x, nz)) {
         ini.modelo.position.z = nz; moveu = true;
     }
 
@@ -1235,34 +1502,58 @@ function moverInimigoWaypoint(ini, delta) {
     else              ini.modelo.rotation.y = dz > 0 ? 0 : Math.PI;
 
     // stuck: se parado > 3 s, escolhe novo destino
+    // se bloqueado pelo Golden — redireciona imediatamente sem esperar
     if (moveu) {
         ini._tempoParado = 0;
     } else {
-        ini._tempoParado = (ini._tempoParado || 0) + delta;
-        if (ini._tempoParado > 3.0) {
-            ini.targetWaypointIdx = undefined;
+        const bloqPorGolden = _gCol && (
+            _bloqGolden(nx, nz) ||
+            _bloqGolden(nx, ini.modelo.position.z) ||
+            _bloqGolden(ini.modelo.position.x, nz)
+        );
+        if (bloqPorGolden) {
+            // escolhe o waypoint adjacente mais longe do Golden — anda para o lado oposto
+            const adj = waypointAdj[ini.waypointIdx] ?? [];
+            const gx  = _gCol.modelo.position.x, gz = _gCol.modelo.position.z;
+            const longe = [...adj].sort((a, b) =>
+                Math.hypot(waypoints[b].x - gx, waypoints[b].z - gz) -
+                Math.hypot(waypoints[a].x - gx, waypoints[a].z - gz)
+            );
+            ini.targetWaypointIdx = longe.length > 0 ? longe[0] : undefined;
             ini._tempoParado      = 0;
+        } else {
+            ini._tempoParado = (ini._tempoParado || 0) + delta;
+            if (ini._tempoParado > 3.0) {
+                ini.targetWaypointIdx = undefined;
+                ini._tempoParado      = 0;
+            }
         }
     }
 
     ini.modelo.position.y = ini.spawnY;
 }
 
-function snapParaChaopaandar(ini) {
+function snapParaChaopaandar(ini, minDistJogador = 0) {
     const off = ini.floorOffset ?? 0;
 
     if (waypoints.length > 0) {
-        let nearestIdx = 0, nearestDist = Infinity;
-        waypoints.forEach((wp, i) => {
-            const d = Math.hypot(ini.spawnPos.x - wp.x, ini.spawnPos.z - wp.z);
-            if (d < nearestDist) { nearestDist = d; nearestIdx = i; }
-        });
-        const wp = waypoints[nearestIdx];
-        const fy = wp.y + off; // Y real do modelo = superfície + offset do origin
+        // candidatos ordenados por distância ao spawn
+        const sorted = waypoints
+            .map((wp, i) => ({ i, wp, dSpawn: Math.hypot(ini.spawnPos.x - wp.x, ini.spawnPos.z - wp.z) }))
+            .sort((a, b) => a.dSpawn - b.dSpawn);
+
+        // prefere o mais próximo do spawn que esteja longe o suficiente do jogador
+        const seguros = sorted.filter(c =>
+            Math.hypot(c.wp.x - playerPos.x, c.wp.z - playerPos.z) >= minDistJogador
+        );
+        const escolha = seguros.length > 0 ? seguros[0] : sorted[0]; // fallback: mais próximo do spawn
+
+        const wp = escolha.wp;
+        const fy = wp.y + off;
         ini.modelo.position.set(wp.x, fy, wp.z);
         ini.spawnY            = fy;
-        ini.waypointIdx       = nearestIdx;
-        ini.prevWaypointIdx   = nearestIdx;
+        ini.waypointIdx       = escolha.i;
+        ini.prevWaypointIdx   = escolha.i;
         ini.targetWaypointIdx = undefined;
         ini.posicionado = true;
         return;
@@ -1292,10 +1583,10 @@ function atualizarCoracaoProximidade() {
         const d = Math.hypot(ini.modelo.position.x - playerPos.x, ini.modelo.position.z - playerPos.z);
         if (d < minDist) minDist = d;
     });
-    if (minDist === Infinity) { setCoracaoFactor(1.3); return; }
-    // factor: 1.3 (base sem inimigos) a distancia 15+, até 4.0 a distancia 2 ou menos
+    if (minDist === Infinity) { setCoracaoFactor(1.6); return; }
+    // factor: 1.6 (base sem inimigos) → 4.0 (inimigo a 2 unidades)
     const t = 1 - Math.min(1, Math.max(0, (minDist - 2) / 13));
-    setCoracaoFactor(1.3 + t * 2.7);
+    setCoracaoFactor(1.6 + t * 2.4);
 }
 
 function _prepararAtivacoes() {
@@ -1321,8 +1612,20 @@ function _prepararAtivacoes() {
             { nome: pool[2], fired: false,
               check: () => totalTokens > 0 && tokensApanhados >= Math.floor(totalTokens * 0.75) },
         ];
+    } else if (dificuldadeAtual === 'dificil') {
+        _pendingActivations = [
+            { nome: '__golden__', fired: false,
+              check: () => phoneguyTerminou && tempoAposPhoneguy >= 5 },
+            { nome: pool[0], fired: false,
+              check: () => phoneguyTerminou && tempoAposPhoneguy >= atraso1 },
+            { nome: pool[1], fired: false,
+              check: () => totalTokens > 0 && tokensApanhados >= Math.floor(totalTokens * 0.30) },
+            { nome: pool[2], fired: false,
+              check: () => totalTokens > 0 && tokensApanhados >= Math.floor(totalTokens * 0.55) },
+            { nome: pool[3], fired: false,
+              check: () => totalTokens > 0 && tokensApanhados >= Math.floor(totalTokens * 0.80) },
+        ];
     }
-    // dificil: a configurar depois (inclui golden freddy)
 }
 
 function atualizarInimigos(delta) {
@@ -1336,28 +1639,38 @@ function atualizarInimigos(delta) {
         _ativacoesPreparadas = true;
     }
 
-    // dispara activações pendentes
-    _pendingActivations.forEach(pa => {
-        if (pa.fired || alertas[pa.nome]) return;
-        if (pa.check()) { pa.fired = true; ativarInimigo(pa.nome); }
-    });
+    // dispara activações pendentes — no máximo 1 de cada vez, mínimo 15s de intervalo
+    for (const pa of _pendingActivations) {
+        if (pa.fired) continue;
+        if (pa.nome !== '__golden__' && alertas[pa.nome]) continue;
+        if (elapsedTime - _tempoUltimaAtivacao < COOLDOWN_ATIVACAO) break;
+        if (pa.check()) {
+            pa.fired = true;
+            _tempoUltimaAtivacao = elapsedTime;
+            if (pa.nome === '__golden__') {
+                _iniciarGoldenFreddy();
+            } else {
+                ativarInimigo(pa.nome);
+            }
+            break;
+        }
+    }
 
     inimigos.forEach(ini => {
-        if (!ini.ativo) return; // snap só acontece em ativarInimigo()
-
-        // weeping angel: desativado temporariamente para teste de movimento
-        // const temAngelMechanic = ini.nome === 'freddy' || ini.nome === 'foxy';
-        // if (temAngelMechanic && _jogadorOlha(ini)) { trocarClip(ini, ini.clipIdle); return; }
+        if (!ini.ativo) return;
+        if (ini.nome === 'golden') return;       // golden gerido por _tickGoldenFreddy
+        if (ini._pausadoPorGolden) return;       // pausado durante jumpscare do Golden
 
         moverInimigoWaypoint(ini, delta);
 
-        // captura do jogador — desativado para teste de movimento
-        // const d2 = Math.hypot(
-        //     ini.modelo.position.x - playerPos.x,
-        //     ini.modelo.position.z - playerPos.z
-        // );
-        // if (d2 < 1.5) jogoOver(ini.nome);
+        const d2 = Math.hypot(
+            ini.modelo.position.x - playerPos.x,
+            ini.modelo.position.z - playerPos.z
+        );
+        if (d2 < 1.2) jogoOver(ini.nome);
     });
+
+    if (dificuldadeAtual === 'dificil') _tickGoldenFreddy(delta);
 }
 
 // ─── MENSAGENS / ALERTAS ───────────────────────────────────────────
@@ -1434,17 +1747,37 @@ function mostrarAlerta(nome) {
     }, 3000);
 }
 
-function ativarInimigo(nome) {
-    alertas[nome] = true;
-    mostrarAlerta(nome);
-    const ini = inimigos.find(i => i.nome === nome);
-    if (!ini) return;
+let _alertaCorridaMostrado = false;
+function _alertaCorrida() {
+    if (_alertaCorridaMostrado) return;
+    _alertaCorridaMostrado = true;
+    const el = document.createElement('div');
+    Object.assign(el.style, {
+        position: 'fixed', top: '0', left: '0', right: '0',
+        zIndex: '45',
+        background: 'rgba(0,0,0,0.92)',
+        borderBottom: '1.5px solid #ffcc00',
+        fontFamily: "'Courier New', monospace",
+        color: '#ffcc00', textAlign: 'center',
+        padding: '10px 16px',
+        fontSize: 'clamp(0.8em,1.6vw,1em)',
+        letterSpacing: '5px',
+        opacity: '0', transition: 'opacity 0.3s ease',
+        pointerEvents: 'none'
+    });
+    el.textContent = '⚠  CORRA PARA O ESCRITÓRIO  ⚠';
+    document.body.appendChild(el);
+    requestAnimationFrame(() => { el.style.opacity = '1'; });
+    // fica mais tempo no ecrã por ser importante
+    setTimeout(() => {
+        el.style.opacity = '0';
+        setTimeout(() => el.remove(), 400);
+    }, 5000);
+}
 
-    // snap para a zona caminhável mais próxima do spawn ANTES de ativar
-    if (zonasCaminhaveis.length > 0) snapParaChaopaandar(ini);
+function _executarAtivacao(ini) {
+    if (zonasCaminhaveis.length > 0) snapParaChaopaandar(ini, 5.0); // nunca spawna a < 5u do jogador
     ini.ativo = true;
-
-    // troca para clip de andar com o timeScale correto
     const clipMove = ini.clipAndar || ini.clipIdle;
     if (clipMove && ini.acaoAtual) {
         ini.acaoAtual.stop();
@@ -1454,6 +1787,223 @@ function ativarInimigo(nome) {
         if (ini.walkYOffset) {
             ini.spawnY += ini.walkYOffset;
             ini.modelo.position.y = ini.spawnY;
+        }
+    }
+}
+
+function _spawnWaypointDist(ini) {
+    // distância do jogador ao waypoint mais próximo do spawn deste inimigo
+    if (waypoints.length === 0) return Infinity;
+    let best = Infinity;
+    waypoints.forEach(wp => {
+        const dSpawn = Math.hypot(ini.spawnPos.x - wp.x, ini.spawnPos.z - wp.z);
+        if (dSpawn < best) best = dSpawn;
+    });
+    // o waypoint mais próximo do spawn — distância ao jogador
+    let nearestWP = waypoints[0];
+    let nearestD  = Infinity;
+    waypoints.forEach(wp => {
+        const d = Math.hypot(ini.spawnPos.x - wp.x, ini.spawnPos.z - wp.z);
+        if (d < nearestD) { nearestD = d; nearestWP = wp; }
+    });
+    return Math.hypot(nearestWP.x - playerPos.x, nearestWP.z - playerPos.z);
+}
+
+function ativarInimigo(nome) {
+    alertas[nome] = true;
+    mostrarAlerta(nome);
+    const ini = inimigos.find(i => i.nome === nome);
+    if (!ini) return;
+    _executarAtivacao(ini); // snapParaChaopaandar garante distância mínima ao jogador
+}
+
+// ─── GOLDEN FREDDY (MODO DIFÍCIL) ─────────────────────────────────
+
+function _iniciarGoldenFreddy() {
+    _goldenIniciado = true;
+    _goldenFase     = 0;
+    _goldenCooldown = 3 + Math.random() * 4; // 3–7s após ativação
+    const g = inimigos.find(i => i.nome === 'golden');
+    if (g) { g.modelo.visible = false; g.ativo = false; }
+}
+
+function _mostrarItsMeGolden(cb) {
+    const el = document.createElement('div');
+    Object.assign(el.style, {
+        position: 'fixed', inset: '0', zIndex: '55',
+        overflow: 'hidden', pointerEvents: 'none'
+    });
+    const txt = document.createElement('div');
+    Object.assign(txt.style, {
+        position: 'absolute',
+        fontFamily: "'Courier New', monospace",
+        fontSize:   'clamp(2em,5vw,3.5em)',
+        color:      '#ffffff',
+        letterSpacing: '14px',
+        fontWeight:    'bold',
+        opacity:       '0',
+        transform:     'translate(-50%, -50%)',
+        whiteSpace:    'nowrap'
+    });
+    txt.textContent = "IT'S ME";
+    el.appendChild(txt);
+    document.body.appendChild(el);
+
+    function flash(onDone) {
+        txt.style.left    = (10 + Math.random() * 80) + '%';
+        txt.style.top     = (15 + Math.random() * 70) + '%';
+        txt.style.opacity = (0.55 + Math.random() * 0.4).toFixed(2);
+        const dur = 55 + Math.random() * 95;
+        setTimeout(() => { txt.style.opacity = '0'; setTimeout(onDone, 70 + Math.random() * 130); }, dur);
+    }
+
+    let count = 0;
+    const total = 2;
+    function nextFlash() {
+        if (count >= total) { el.remove(); cb?.(); return; }
+        count++;
+        flash(nextFlash);
+    }
+    nextFlash();
+}
+
+function _executarTeleporte() {
+    if (_goldenCapturou || jogoTerminado || jogoGanho) return;
+    const g = inimigos.find(i => i.nome === 'golden');
+    if (!g || waypoints.length === 0) return;
+
+    let wp;
+    if (_goldenFase === 2) {
+        // 2ª posição: waypoint mais próximo do escritório (zona de spawn do jogador)
+        const ox = OFFICE_XZ.x, oz = OFFICE_XZ.y;
+        wp = waypoints.reduce((best, w) =>
+            Math.hypot(w.x - ox, w.z - oz) < Math.hypot(best.x - ox, best.z - oz) ? w : best
+        , waypoints[0]);
+    } else {
+        // 1ª posição: waypoint aleatório — não ao lado do jogador nem perto do escritório
+        const pool = waypoints.filter(w =>
+            Math.hypot(w.x - playerPos.x, w.z - playerPos.z) > 3 &&
+            Math.hypot(w.x - OFFICE_XZ.x, w.z - OFFICE_XZ.y) > 6
+        );
+        const lista = pool.length > 0 ? pool : waypoints;
+        wp = lista[Math.floor(Math.random() * lista.length)];
+    }
+
+    // usa offset pré-calculado no loadChar — sem traversal de geometria por teleporte
+    const fy = wp.y + _goldenFeetAdj - 0.25;
+    g.modelo.position.set(wp.x, fy, wp.z);
+    g.spawnY         = fy;
+    g.ativo          = true;
+    g.modelo.visible = true;
+    // fase 1: fica 2min ou até 70% tokens; fase 2: fica até ser apanhado
+    _goldenTempoVisivel = _goldenFase === 1 ? 120 : 99999;
+}
+
+function _goldenCapturarJogador() {
+    if (_goldenCapturou) return;
+    _goldenCapturou = true;
+    const g = inimigos.find(i => i.nome === 'golden');
+    if (g) { g.ativo = false; g.modelo.visible = false; }
+
+    // pausa os outros animatrónicos durante o jumpscare
+    inimigos.forEach(i => { if (i.nome !== 'golden') i._pausadoPorGolden = true; });
+    tocar('jumpscare_golden');
+
+    const gifSrc = JUMPSCARE_GIFS['golden'];
+    const overlay = document.createElement('div');
+    Object.assign(overlay.style, {
+        position: 'fixed', inset: '0', zIndex: '60',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: '#000', pointerEvents: 'none',
+        opacity: '0', transition: 'opacity 0.2s ease'
+    });
+    if (gifSrc) {
+        const img = document.createElement('img');
+        img.src = gifSrc;
+        Object.assign(img.style, { width: '100vw', height: '100vh', objectFit: 'contain' });
+        overlay.appendChild(img);
+    }
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => { overlay.style.opacity = '1'; });
+
+    setTimeout(() => {
+        overlay.style.transition = 'opacity 0.5s ease';
+        overlay.style.opacity = '0';
+        setTimeout(() => {
+            overlay.remove();
+            inimigos.forEach(i => { if (i.nome !== 'golden') delete i._pausadoPorGolden; });
+            _aplicarDebuff();
+        }, 500);
+    }, 3000);
+}
+
+function _aplicarDebuff() {
+    _debuffAtivo = true;
+    _debuffOverlay = document.createElement('div');
+    Object.assign(_debuffOverlay.style, {
+        position: 'fixed', inset: '0', zIndex: '35',
+        background: 'rgba(0,0,0,0.55)',
+        pointerEvents: 'none',
+        transition: 'opacity 0.8s ease'
+    });
+    document.body.appendChild(_debuffOverlay);
+    // debuff dura 20 s
+    setTimeout(() => {
+        if (_debuffOverlay) {
+            _debuffOverlay.style.opacity = '0';
+            setTimeout(() => { _debuffOverlay?.remove(); _debuffOverlay = null; }, 800);
+        }
+        _debuffAtivo = false;
+    }, 20000);
+}
+
+function _atualizarGoldenEfeitos() {
+    if (_goldenLuz) {
+        const flicker = Math.random() > 0.93 ? 3 : 0;
+        _goldenLuz.intensity = 1.5 + Math.sin(elapsedTime * 9.3) * 0.8 + flicker;
+    }
+    // emissive glitch ocasional
+    if (Math.random() > 0.96) {
+        const g = inimigos.find(i => i.nome === 'golden');
+        if (g) g.modelo.traverse(o => {
+            if (!o.isMesh && !o.isSkinnedMesh) return;
+            const mats = Array.isArray(o.material) ? o.material : [o.material];
+            mats.forEach(m => { if (m.emissive) m.emissiveIntensity = 0.3 + Math.random() * 2.5; });
+        });
+    }
+}
+
+function _tickGoldenFreddy(delta) {
+    if (!_goldenIniciado || _goldenCapturou || jogoTerminado || jogoGanho) return;
+    const g = inimigos.find(i => i.nome === 'golden');
+    if (!g) return;
+
+    if (g.ativo) {
+        if (_goldenFase === 1) _goldenTempoVisivel -= delta;
+
+        // captura se jogador se aproximar
+        const d = Math.hypot(g.modelo.position.x - playerPos.x, g.modelo.position.z - playerPos.z);
+        if (d < 1.5) { _goldenCapturarJogador(); return; }
+
+        _atualizarGoldenEfeitos();
+
+        // fase 1: muda para perto do escritório ao fim de 2min OU quando 70% tokens apanhados
+        if (_goldenFase === 1) {
+            const tokens70 = totalTokens > 0 && tokensApanhados >= Math.floor(totalTokens * 0.70);
+            if (_goldenTempoVisivel <= 0 || tokens70) {
+                g.ativo          = false;
+                g.modelo.visible = false;
+                _goldenFase     = 2;
+                _goldenCooldown = 30 + Math.random() * 10; // pausa 30–40s (só conta quando jogo ativo)
+            }
+        }
+        // fase 2: fica até ser apanhado — sem transição automática
+    } else {
+        _goldenCooldown -= delta; // só decrementa aqui — congela automaticamente em pausa
+        if (_goldenCooldown <= 0) {
+            _goldenCooldown = Infinity;
+            if (_goldenFase === 0) _goldenFase = 1;
+            _mostrarItsMeGolden(() => _executarTeleporte());
         }
     }
 }
