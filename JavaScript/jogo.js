@@ -12,14 +12,21 @@ const EYE_HEIGHT = 3.9;
 
 let cenaJogo, camaraJogo;
 let luzAmbiente = null;
-let lanterna     = null;
+let lanterna    = null;
+let luzDirecional = null;
+
+// toggles de luz (Req. 3)
+let _luzAmbienteOn  = true;
+let _luzPointOn     = true;
+let _luzSpotOn      = true;
+let _luzDirOn       = true;
 
 let playerPos   = new THREE.Vector3(0, 0, 0);
 let playerAngle = 0;
 let targetAngle = 0;
 
 // colisao — zonas caminhaveis carregadas do chaopaandar.glb
-let mapaBBs = [];
+let mapaBBs    = [];
 const _pBox = new THREE.Box3();
 let zonasCaminhaveis   = [];
 let zonasSemExpansao   = []; // cópias sem expandByScalar — usadas em _caminhoClear para evitar pontes sobre paredes
@@ -40,6 +47,7 @@ let elapsedTime     = 0;
 
 let canvasMapa = null, ctxMapa = null;
 let luzesFlicker = [];
+let _chaopaandarMeshes  = [];       // apenas para collision (zonasCaminhaveis)
 
 // ─── INIMIGOS ──────────────────────────────────────────────────────
 let inimigos = [];
@@ -105,7 +113,6 @@ export function iniciarJogo(renderer, dificuldade = 'facil') {
         mouseOffX = rawMX * 0.34;
         mouseOffY = rawMY * 0.26;
     });
-
     configurarCallbacks(
         () => { /* retomar — esconderPausa já foi chamado pelo botão */ },
         () => { window.location.reload(); },
@@ -119,6 +126,13 @@ export function iniciarJogo(renderer, dificuldade = 'facil') {
                 mostrarPausa();
             }
             return;
+        }
+        // Req. 3 — toggles de luz (só durante jogo activo)
+        if (jogoIniciado && !estaPausado() && !introCamera && !acordando && !mensagemInicioAtiva) {
+            if (e.code === 'Digit1') { _toggleLuz('ambiente');    e.preventDefault(); return; }
+            if (e.code === 'Digit2') { _toggleLuz('point');       e.preventDefault(); return; }
+            if (e.code === 'Digit3') { _toggleLuz('spot');        e.preventDefault(); return; }
+            if (e.code === 'Digit4') { _toggleLuz('direcional');  e.preventDefault(); return; }
         }
         keys[e.code] = true;
         if (e.code === 'KeyA') targetAngle += Math.PI / 2;
@@ -142,6 +156,11 @@ export function iniciarJogo(renderer, dificuldade = 'facil') {
     luzAmbiente = new THREE.AmbientLight(0xffeedd, 0);
     cenaJogo.add(luzAmbiente);
 
+    // Req. 3 — DirectionalLight (tipo de luz ainda não presente)
+    luzDirecional = new THREE.DirectionalLight(0xfff5e0, 0.0);
+    luzDirecional.position.set(5, 20, 5);
+    cenaJogo.add(luzDirecional);
+
     // lanterna presa à camara — segue o mouse
     lanterna = new THREE.SpotLight(0xfff5dd, 60);
     lanterna.angle    = 0.44;
@@ -153,6 +172,7 @@ export function iniciarJogo(renderer, dificuldade = 'facil') {
     cenaJogo.add(luzAlvo);
     lanterna.target = luzAlvo;
     cenaJogo.add(camaraJogo);
+
 
     // loading screen
     const loadDiv = criarLoadingScreen();
@@ -242,16 +262,18 @@ export function iniciarJogo(renderer, dificuldade = 'facil') {
         gltf.scene.traverse(o => {
             if (!o.isMesh) return;
             o.visible = false;
+            _chaopaandarMeshes.push(o);
             const bb = new THREE.Box3().setFromObject(o);
             zonasSemExpansao.push(bb.clone()); // cópia exacta antes de expandir
             bb.expandByScalar(0.08); // cobre micro-gaps entre planes adjacentes
             zonasCaminhaveis.push(bb);
         });
+        cenaJogo.add(gltf.scene); // adicionado à cena mas invisível — colisão
         criarTokens();
         _construirWaypoints();
     });
+
     criarMinimapa();
-    criarHUD();
 
     window.addEventListener('resize', () => {
         camaraJogo.aspect = window.innerWidth / window.innerHeight;
@@ -353,7 +375,7 @@ export function iniciarJogo(renderer, dificuldade = 'facil') {
                 const distOffice = Math.hypot(playerPos.x - OFFICE_XZ.x, playerPos.z - OFFICE_XZ.y);
                 if (distOffice < 3.0) _ganharJogo();
             }
-            atualizarCamera();
+            atualizarCamera(delta);
         }
         atualizarTokens();
         atualizarMinimapa();
@@ -420,8 +442,9 @@ function atualizarMovimento(delta) {
     });
 }
 
-function atualizarCamera() {
+function atualizarCamera(delta) {
     if (introCamera || acordando || mensagemInicioAtiva) return;
+
     camaraJogo.position.set(playerPos.x, playerPos.y + EYE_HEIGHT, playerPos.z);
 
     smoothX += (mouseOffX - smoothX) * 0.10;
@@ -430,14 +453,12 @@ function atualizarCamera() {
     const fwdX = Math.sin(playerAngle), fwdZ = Math.cos(playerAngle);
     const rgtX = -Math.cos(playerAngle), rgtZ = Math.sin(playerAngle);
 
-    // camara: pescoco suave com pequeno offset
     const dx = fwdX + rgtX * smoothX, dy = smoothY, dz = fwdZ + rgtZ * smoothX;
     const len = Math.sqrt(dx*dx + dy*dy + dz*dz);
-    camaraJogo.lookAt(
-        camaraJogo.position.x + (dx/len) * 10,
-        camaraJogo.position.y + (dy/len) * 10,
-        camaraJogo.position.z + (dz/len) * 10
-    );
+    const lx = camaraJogo.position.x + (dx/len) * 10;
+    const ly = camaraJogo.position.y + (dy/len) * 10;
+    const lz = camaraJogo.position.z + (dz/len) * 10;
+    camaraJogo.lookAt(lx, ly, lz);
 
     // lanterna: unproject exacto do mouse — igual ao menu
     const vec = new THREE.Vector3(rawMX, rawMY, 0.5).unproject(camaraJogo);
@@ -445,15 +466,45 @@ function atualizarCamera() {
     if (luzAlvo) luzAlvo.position.copy(camaraJogo.position).addScaledVector(dir, 20);
 }
 
+// ─── REQ. 3 — toggles de luz ─────────────────────────────────────────────────
+
+function _toggleLuz(tipo) {
+    if (tipo === 'ambiente') {
+        _luzAmbienteOn = !_luzAmbienteOn;
+        luzAmbiente.intensity = _luzAmbienteOn ? 0.03 : 0;
+    } else if (tipo === 'point') {
+        _luzPointOn = !_luzPointOn;
+        luzesFlicker.forEach(item => {
+            if (item.luz.isPointLight) item.luz.intensity = _luzPointOn ? undefined : 0;
+            // undefined = devolve ao controlo do flicker; 0 = força apagada
+            if (!_luzPointOn) item.luz.intensity = 0;
+        });
+    } else if (tipo === 'spot') {
+        _luzSpotOn = !_luzSpotOn;
+        if (lanterna) lanterna.intensity = _luzSpotOn ? 60 : 0;
+        luzesFlicker.forEach(item => {
+            if (item.luz.isSpotLight) item.luz.intensity = _luzSpotOn ? undefined : 0;
+            if (!_luzSpotOn && item.luz.isSpotLight) item.luz.intensity = 0;
+        });
+    } else if (tipo === 'direcional') {
+        _luzDirOn = !_luzDirOn;
+        luzDirecional.intensity = _luzDirOn ? 0.6 : 0;
+    }
+}
+
 function atualizarLuzesFlicker(tempo) {
     luzesFlicker.forEach(item => {
+        // respeita toggles globais
+        const isPoint = item.luz.isPointLight;
+        const isSpot  = item.luz.isSpotLight;
+        if (isPoint && !_luzPointOn) { item.luz.intensity = 0; return; }
+        if (isSpot  && !_luzSpotOn)  { item.luz.intensity = 0; return; }
+
         const fator = item.fator ?? 1;
         if (item.estragada) {
-            // luz estragada: pisca irregularmente
             const n = Math.sin(tempo * 11.3 + item.fase) * Math.sin(tempo * 17.7 + item.fase * 1.3);
             item.luz.intensity = (n > 0.2 ? 1.6 + n * 0.4 : (n > -0.1 ? 0.2 : 0)) * fator;
         } else {
-            // luz estavel com raros glitches
             const base = 1.1 + Math.sin(tempo * 1.2 + item.fase) * 0.08;
             const glitch = Math.random() > 0.996 ? -0.8 : 0;
             item.luz.intensity = Math.max(0, base + glitch) * fator;
@@ -805,6 +856,7 @@ function jogoOver(nomeInimigo) {
     jogoTerminado = true;
     jogoIniciado  = false;
 
+
     inimigos.forEach(i => { i.ativo = false; });
     parar('coracao'); parar('luzFlicker'); parar('phoneguy'); parar('passosJogo'); parar('passosHeavy');
     tocar(`jumpscare_${nomeInimigo}`);
@@ -853,6 +905,7 @@ function _ganharJogo() {
     jogoGanho     = true;
     jogoTerminado = true;
     jogoIniciado  = false;
+
     inimigos.forEach(i => { i.ativo = false; });
     parar('coracao'); parar('luzFlicker'); parar('phoneguy'); parar('passosJogo'); parar('passosHeavy');
 
@@ -1014,30 +1067,13 @@ function criarHUD() {
         color: '#886688', fontFamily: 'monospace', fontSize: '11px',
         textAlign: 'right', pointerEvents: 'none', lineHeight: '1.8'
     });
-    hud.innerHTML = 'W / ↑ — andar<br>A / ← — virar esq<br>D / → — virar dir';
+    hud.innerHTML =
+        'W / ↑ — andar<br>' +
+        'A / ← — virar esq<br>' +
+        'D / → — virar dir<br>' +
+        'O &nbsp;&nbsp;&nbsp;&nbsp;— câmara ortográfica<br>' +
+        '1-4 &nbsp;— ligar/desligar luzes';
     document.body.appendChild(hud);
-
-    // display de coordenadas para debug de spawn
-    const coords = document.createElement('div');
-    coords.id = 'debugCoords';
-    Object.assign(coords.style, {
-        position: 'fixed', top: '14px', right: '14px', zIndex: '30',
-        color: '#ffaa00', fontFamily: 'monospace', fontSize: '12px',
-        textAlign: 'right', pointerEvents: 'none', background: 'rgba(0,0,0,0.55)',
-        padding: '4px 8px', borderRadius: '3px'
-    });
-    document.body.appendChild(coords);
-
-    // atualiza coords a cada frame (jogador + posição dos inimigos para debug)
-    setInterval(() => {
-        let txt = `Jogador  X:${playerPos.x.toFixed(1)}  Z:${playerPos.z.toFixed(1)}`;
-        inimigos.forEach(ini => {
-            const p = ini.modelo.position;
-            txt += `\n${ini.nome.padEnd(7)}  X:${p.x.toFixed(1)}  Y:${p.y.toFixed(1)}  Z:${p.z.toFixed(1)}`;
-        });
-        coords.textContent = txt;
-        coords.style.whiteSpace = 'pre';
-    }, 200);
 }
 
 // ─── SPAWN ZONES ──────────────────────────────────────────────────
