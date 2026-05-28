@@ -11,6 +11,19 @@ const MOVE_SPEED = 4.5;
 const EYE_HEIGHT = 3.9;
 
 let cenaJogo, camaraJogo;
+let camaraOrtho         = null;
+let _mapaTopAtivo       = false;
+let _spriteJogadorTop   = null;   // seta amarela (igual ao minimapa)
+let _modeloPolicia      = null;   // police.glb
+let _policiaMixer       = null;   // AnimationMixer do policia
+let _luzOrthoAmb        = null;
+let _luzOrthoDir        = null;
+let _luzFlashlightTop       = null;
+let _luzFlashlightTarget    = null;
+let _luzesAnimTop       = {};
+let _mapaJogo1Scene     = null;
+let _mapaAmpliadoScene  = null;
+let _mapaAmpliadoCamY   = 7;
 let luzAmbiente = null;
 let lanterna    = null;
 let luzDirecional = null;
@@ -127,12 +140,13 @@ export function iniciarJogo(renderer, dificuldade = 'facil') {
             }
             return;
         }
-        // teclas 1-4 só funcionam quando o jogo está a correr
+        // teclas 1-4 e O só funcionam quando o jogo está a correr
         if (jogoIniciado && !estaPausado() && !introCamera && !acordando && !mensagemInicioAtiva) {
             if (e.code === 'Digit1') { _toggleLuz('ambiente');    e.preventDefault(); return; }
             if (e.code === 'Digit2') { _toggleLuz('point');       e.preventDefault(); return; }
             if (e.code === 'Digit3') { _toggleLuz('spot');        e.preventDefault(); return; }
             if (e.code === 'Digit4') { _toggleLuz('direcional');  e.preventDefault(); return; }
+            if (e.code === 'KeyO')   { _mapaTopAtivo = !_mapaTopAtivo; _atualizarLabelMapaTop(); e.preventDefault(); return; }
         }
         keys[e.code] = true;
         if (e.code === 'KeyA') targetAngle += Math.PI / 2;
@@ -148,6 +162,10 @@ export function iniciarJogo(renderer, dificuldade = 'facil') {
     cenaJogo.background = new THREE.Color(0x111111);
 
     camaraJogo = new THREE.PerspectiveCamera(80, window.innerWidth / window.innerHeight, 0.05, 60);
+
+    // câmara ortográfica para vista de cima (tecla O)
+    camaraOrtho = new THREE.OrthographicCamera(-28, 28, 28, -28, 0.1, 200);
+    camaraOrtho.up.set(0, 0, -1); // -Z aponta para cima no ecrã (frente do mapa fica em cima)
 
     renderer.toneMapping         = THREE.NoToneMapping;
     renderer.toneMappingExposure = 1.0;
@@ -197,6 +215,7 @@ export function iniciarJogo(renderer, dificuldade = 'facil') {
             }
         });
 
+        _mapaJogo1Scene = gltf.scene;
         cenaJogo.add(gltf.scene);
 
         const box    = new THREE.Box3().setFromObject(gltf.scene);
@@ -278,6 +297,7 @@ export function iniciarJogo(renderer, dificuldade = 'facil') {
     });
 
     criarMinimapa();
+    _iniciarMapaAmpliado();
 
     window.addEventListener('resize', () => {
         camaraJogo.aspect = window.innerWidth / window.innerHeight;
@@ -385,9 +405,161 @@ export function iniciarJogo(renderer, dificuldade = 'facil') {
         atualizarTokens();
         atualizarMinimapa();
 
-        renderer.render(cenaJogo, camaraJogo);
+        if (_mapaTopAtivo && camaraOrtho) {
+            if (_mapaJogo1Scene)    _mapaJogo1Scene.visible   = false;
+            if (_mapaAmpliadoScene) _mapaAmpliadoScene.visible = true;
+            if (_modeloPolicia) {
+                _modeloPolicia.visible    = true;
+                _modeloPolicia.position.set(playerPos.x, _floorY || 0, playerPos.z);
+                _modeloPolicia.rotation.y = playerAngle;
+                if (_policiaMixer) _policiaMixer.update(delta);
+                if (_spriteJogadorTop) _spriteJogadorTop.visible = false;
+            } else if (_spriteJogadorTop) {
+                _spriteJogadorTop.visible = true;
+                _spriteJogadorTop.position.set(playerPos.x, 1, playerPos.z);
+                _spriteJogadorTop.material.rotation = playerAngle + Math.PI;
+            }
+            if (_luzOrthoAmb) _luzOrthoAmb.intensity = 0.04;
+            if (_luzOrthoDir) _luzOrthoDir.intensity = 0.01;
+            if (_luzFlashlightTop && _luzFlashlightTarget) {
+                _luzFlashlightTop.intensity = 25;
+                _luzFlashlightTop.position.set(playerPos.x, _mapaAmpliadoCamY, playerPos.z);
+                _luzFlashlightTarget.position.set(
+                    playerPos.x + Math.sin(playerAngle) * 7,
+                    0,
+                    playerPos.z + Math.cos(playerAngle) * 7
+                );
+                _luzFlashlightTarget.updateMatrixWorld();
+            }
+            const _chicaOff = spawnPalco ? (spawnPalco.bb.max.x - spawnPalco.bb.min.x) * 0.20 : 1.7;
+            inimigos.forEach(ini => {
+                const luz = _luzesAnimTop[ini.nome];
+                if (!luz) return;
+                luz.intensity = 4;
+                let vx = ini.modelo.position.x, vz = ini.modelo.position.z;
+                if (!ini.ativo) {
+                    if (ini.nome === 'chica') { vx -= _chicaOff; vz += 5.0; }
+                    if (ini.nome === 'foxy')  { vz -= 3.0; }
+                }
+                luz.position.set(vx, _mapaAmpliadoCamY - 1, vz);
+            });
+            const asp  = window.innerWidth / window.innerHeight;
+            const zoom = 6;
+            camaraOrtho.left   = -zoom * asp; camaraOrtho.right  =  zoom * asp;
+            camaraOrtho.top    =  zoom;        camaraOrtho.bottom = -zoom;
+            camaraOrtho.near   = 0.1;
+            camaraOrtho.far    = _mapaAmpliadoCamY + 5;
+            camaraOrtho.updateProjectionMatrix();
+            camaraOrtho.position.set(playerPos.x, _mapaAmpliadoCamY, playerPos.z);
+            camaraOrtho.lookAt(playerPos.x, 0, playerPos.z);
+            // pizzas viradas para cima só no modo O
+            tokens.forEach(t => {
+                if (t.children[0]) { t.children[0].rotation.x = 0; t.position.y = t.userData.worldPos.y; }
+            });
+            renderer.render(cenaJogo, camaraOrtho);
+            // restaurar pizzas de pé
+            tokens.forEach(t => { if (t.children[0]) t.children[0].rotation.x = Math.PI / 2; });
+            if (_mapaJogo1Scene)    _mapaJogo1Scene.visible   = true;
+            if (_mapaAmpliadoScene) _mapaAmpliadoScene.visible = false;
+            if (_luzOrthoAmb) _luzOrthoAmb.intensity = 0;
+            if (_luzOrthoDir) _luzOrthoDir.intensity = 0;
+            if (_luzFlashlightTop) _luzFlashlightTop.intensity = 0;
+            Object.values(_luzesAnimTop).forEach(l => { l.intensity = 0; });
+            if (_modeloPolicia)    _modeloPolicia.visible     = false;
+            if (_spriteJogadorTop) _spriteJogadorTop.visible  = false;
+        } else {
+            renderer.render(cenaJogo, camaraJogo);
+        }
     }
     loop();
+}
+
+function _iniciarMapaAmpliado() {
+    _luzOrthoAmb = new THREE.AmbientLight(0xffffff, 0);
+    _luzOrthoDir = new THREE.DirectionalLight(0xffffff, 0);
+    _luzOrthoDir.position.set(0, 1, 0);
+    cenaJogo.add(_luzOrthoAmb);
+    cenaJogo.add(_luzOrthoDir);
+
+    loader.load('./Models/mapaampliado/mapaampliado.glb', gltf => {
+        _mapaAmpliadoScene = gltf.scene;
+        _mapaAmpliadoScene.visible = false;
+        gltf.scene.traverse(o => {
+            if (!o.isMesh) return;
+            const mats = Array.isArray(o.material) ? o.material : [o.material];
+            mats.forEach(m => { m.emissive = new THREE.Color(0x060404); m.emissiveIntensity = 0.30; m.needsUpdate = true; });
+        });
+        const box = new THREE.Box3().setFromObject(gltf.scene);
+        _mapaAmpliadoCamY = box.max.y - 0.4;
+        cenaJogo.add(_mapaAmpliadoScene);
+    });
+
+    // police.glb
+    loader.load('./Models/Personagens/police.glb', gltf => {
+        _modeloPolicia = gltf.scene;
+        const box = new THREE.Box3().setFromObject(_modeloPolicia);
+        const h = box.max.y - box.min.y;
+        if (h > 0) _modeloPolicia.scale.setScalar(6.0 / h);
+        _modeloPolicia.updateMatrixWorld(true);
+        corrigirEscalaSkinnedMesh(_modeloPolicia);
+        _modeloPolicia.visible = false;
+        _modeloPolicia.traverse(o => {
+            if (!o.isMesh && !o.isSkinnedMesh) return;
+            o.frustumCulled = false;
+        });
+        if (gltf.animations && gltf.animations.length > 0) {
+            _policiaMixer = new THREE.AnimationMixer(_modeloPolicia);
+            const clip = THREE.AnimationClip.findByName(gltf.animations, 'mixamo.com') || gltf.animations[0];
+            _policiaMixer.clipAction(clip).play();
+        }
+        cenaJogo.add(_modeloPolicia);
+    });
+
+    // seta amarela de fallback
+    {
+        const cv = document.createElement('canvas');
+        cv.width = cv.height = 64;
+        const ctx = cv.getContext('2d');
+        ctx.fillStyle = '#ffff00';
+        ctx.beginPath();
+        ctx.moveTo(32, 4); ctx.lineTo(56, 60); ctx.lineTo(32, 46); ctx.lineTo(8, 60);
+        ctx.closePath(); ctx.fill();
+        const sMat = new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(cv), transparent: true, depthTest: false });
+        _spriteJogadorTop = new THREE.Sprite(sMat);
+        _spriteJogadorTop.scale.set(1.0, 1.0, 1);
+        _spriteJogadorTop.visible = false;
+        cenaJogo.add(_spriteJogadorTop);
+    }
+
+    _luzFlashlightTop = new THREE.SpotLight(0xffeedd, 0, 22, 0.45, 0.35, 1.2);
+    _luzFlashlightTarget = new THREE.Object3D();
+    cenaJogo.add(_luzFlashlightTarget);
+    _luzFlashlightTop.target = _luzFlashlightTarget;
+    cenaJogo.add(_luzFlashlightTop);
+
+    const CORES = { freddy: 0xcc7722, bonnie: 0x8822cc, chica: 0xddaa00, foxy: 0xdd2200, golden: 0xffcc00 };
+    Object.entries(CORES).forEach(([nome, cor]) => {
+        const luz = new THREE.PointLight(cor, 0, 7);
+        cenaJogo.add(luz);
+        _luzesAnimTop[nome] = luz;
+    });
+}
+
+// label em baixo quando o mapa O está ativo
+let _divMapaTop = null;
+function _atualizarLabelMapaTop() {
+    if (!_divMapaTop) {
+        _divMapaTop = document.createElement('div');
+        Object.assign(_divMapaTop.style, {
+            position: 'fixed', bottom: '14px', left: '50%',
+            transform: 'translateX(-50%)', zIndex: '25',
+            color: '#886688', fontFamily: 'monospace',
+            fontSize: '11px', letterSpacing: '3px', pointerEvents: 'none',
+        });
+        _divMapaTop.textContent = 'VISTA DE CIMA — prima O para sair';
+        document.body.appendChild(_divMapaTop);
+    }
+    _divMapaTop.style.display = _mapaTopAtivo ? 'block' : 'none';
 }
 
 // limites do mapa carregados apos o load
@@ -450,7 +622,7 @@ function atualizarMovimento(delta) {
 
 // câmara e lanterna
 function atualizarCamera(delta) {
-    if (introCamera || acordando || mensagemInicioAtiva) return;
+    if (introCamera || acordando || mensagemInicioAtiva || _mapaTopAtivo) return;
 
     camaraJogo.position.set(playerPos.x, playerPos.y + EYE_HEIGHT, playerPos.z);
 
@@ -560,10 +732,9 @@ function criarPizzaToken() {
     // wrapper: roda em torno do eixo Y (efeito moeda a girar)
     const wrapper = new THREE.Group();
 
-    // inner: a pizza em si, de pé e ligeiramente na diagonal
     const g = new THREE.Group();
     g.rotation.x = Math.PI / 2; // de pé
-    g.rotation.y = 0.45;        // diagonal
+    g.rotation.y = 0.45;
 
     const matBase   = new THREE.MeshStandardMaterial({ color: 0xd4882a, roughness: 0.85 });
     const matCrosta = new THREE.MeshStandardMaterial({ color: 0xb8621a, roughness: 0.9  });
@@ -1457,16 +1628,17 @@ function moverInimigoWaypoint(ini, delta) {
         if (adj.length === 0) { trocarClip(ini, ini.clipIdle); return; }
         const nonBack = adj.filter(idx => idx !== ini.prevWaypointIdx);
         const choices = nonBack.length > 0 ? nonBack : adj;
-        // prefere waypoints não ocupados por outro animatrónico nem perto do Golden
+        // evita waypoints ocupados e zona do Golden
         const golden = inimigos.find(o => o.nome === 'golden' && o.ativo);
         const livres = choices.filter(idx => {
             if (inimigos.some(o => o !== ini && o.ativo && o.nome !== 'golden' &&
                 (o.waypointIdx === idx || o.targetWaypointIdx === idx))) return false;
+            const wp = waypoints[idx];
+            // exclui SEMPRE waypoints perto do spawn do Golden (ativo ou não)
+            if (Math.hypot(wp.x - SPAWN_GOLDEN.x, wp.z - SPAWN_GOLDEN.z) < 3.5) return false;
             if (golden) {
-                const wp = waypoints[idx];
-                // exclui waypoints perto do Golden
+                // se golden estiver ativo, exclui também waypoints perto da sua posição atual
                 if (Math.hypot(wp.x - golden.modelo.position.x, wp.z - golden.modelo.position.z) < 2.0) return false;
-                // exclui waypoints cujo percurso passa pelo Golden
                 const cx = ini.modelo.position.x, cz = ini.modelo.position.z;
                 for (let s = 1; s <= 6; s++) {
                     const t = s / 6;
@@ -1476,6 +1648,29 @@ function moverInimigoWaypoint(ini, delta) {
             }
             return true;
         });
+        // foge do Golden se ficou preso
+        if (livres.length === 0) {
+            const pxg = ini.modelo.position.x, pzg = ini.modelo.position.z;
+            const pertoDGolden = Math.hypot(pxg - SPAWN_GOLDEN.x, pzg - SPAWN_GOLDEN.z) < 5;
+            if (pertoDGolden) {
+                const fuga = waypoints
+                    .map((wp, i) => ({ i, d: Math.hypot(wp.x - SPAWN_GOLDEN.x, wp.z - SPAWN_GOLDEN.z) }))
+                    .filter(o => o.d > 7)
+                    .sort((a, b) => b.d - a.d)
+                    .slice(0, 3);
+                if (fuga.length > 0) {
+                    const dest = fuga[Math.floor(Math.random() * fuga.length)];
+                    ini.waypointIdx = dest.i;
+                    ini.targetWaypointIdx = undefined;
+                    ini.prevWaypointIdx   = undefined;
+                    const wp = waypoints[dest.i];
+                    const fy = wp.y + (ini.floorOffset ?? 0);
+                    ini.modelo.position.set(wp.x, fy, wp.z);
+                    ini.spawnY = fy;
+                }
+                return;
+            }
+        }
         const pool = livres.length > 0 ? livres : choices;
         ini.targetWaypointIdx = pool[Math.floor(Math.random() * pool.length)];
         ini._tempoParado = 0;

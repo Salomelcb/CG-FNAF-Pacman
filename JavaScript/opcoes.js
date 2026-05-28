@@ -231,6 +231,7 @@ function _criarOverlayOpcoes() {
                 <span class="fnaf-ctrl-tecla">RATO</span>     <span class="fnaf-ctrl-desc">Apontar lanterna</span>
                 <span class="fnaf-ctrl-tecla">ESC</span>      <span class="fnaf-ctrl-desc">Pausar jogo</span>
                 <span class="fnaf-ctrl-tecla">1 – 4</span>   <span class="fnaf-ctrl-desc">Ligar / desligar tipos de luz</span>
+                <span class="fnaf-ctrl-tecla">O</span>       <span class="fnaf-ctrl-desc">Vista de cima (câmara ortográfica)</span>
             </div>
 
             <button class="fnaf-btn fnaf-btn-fechar" id="fnaf-btn-fechar-opc">FECHAR</button>
