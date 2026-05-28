@@ -105,8 +105,6 @@ function makeCandleTex() {
     return tex;
 }
 
-// objeto complexo — cupcake de Chica
-// primitivas: CylinderGeometry, SphereGeometry, BoxGeometry, ConeGeometry
 function criarCupcake() {
     const grupo = new THREE.Group();
 
@@ -125,17 +123,17 @@ function criarCupcake() {
     const matFlameOut = new THREE.MeshStandardMaterial({ color: 0xff7700, emissive: 0xff5500, emissiveIntensity: 3, transparent: true, opacity: 0.9 });
     const matFlameIn  = new THREE.MeshStandardMaterial({ color: 0xffee44, emissive: 0xffcc00, emissiveIntensity: 3, transparent: true, opacity: 0.85 });
 
-    // invólucro — CylinderGeometry (cone truncado)
+    // invólucro
     const wrapper = new THREE.Mesh(new THREE.CylinderGeometry(1.05, 0.78, 1.1, 32), matWrapper);
     wrapper.position.y = 0.55;
     grupo.add(wrapper);
 
-    // anel de transição — CylinderGeometry
+    // anel de creme
     const frostRing = new THREE.Mesh(new THREE.CylinderGeometry(1.16, 1.06, 0.12, 32), matFrost);
     frostRing.position.y = 1.15;
     grupo.add(frostRing);
 
-    // cúpula de cobertura — SphereGeometry (metade superior)
+    // cúpula rosa
     const frostDome = new THREE.Mesh(
         new THREE.SphereGeometry(1.1, 32, 24, 0, Math.PI * 2, 0, Math.PI * 0.55),
         matFrost
@@ -143,7 +141,7 @@ function criarCupcake() {
     frostDome.position.y = 1.12;
     grupo.add(frostDome);
 
-    // olhos — SphereGeometry ×5 por olho (anel, sclera, íris, pupila, highlight)
+    // olhos
     function criarOlho(xOff) {
         const g = new THREE.Group();
         g.add(new THREE.Mesh(new THREE.SphereGeometry(0.305, 24, 24), matEyeRing));
@@ -162,44 +160,44 @@ function criarCupcake() {
     grupo.add(criarOlho(-0.38));
     grupo.add(criarOlho(0.38));
 
-    // boca — BoxGeometry
+    // boca
     const mouth = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.09, 0.06), matMouth);
     mouth.position.set(0, 1.36, 1.06);
     grupo.add(mouth);
 
-    // dentes — BoxGeometry ×3
+    // dentes
     for (let i = -1; i <= 1; i++) {
         const tooth = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.13, 0.07), matTeeth);
         tooth.position.set(i * 0.148, 1.33, 1.08);
         grupo.add(tooth);
     }
 
-    // vela — CylinderGeometry
+    // vela
     const vela = new THREE.Mesh(new THREE.CylinderGeometry(0.095, 0.095, 0.92, 16), matVela);
     vela.position.set(0, 2.38, 0);
     grupo.add(vela);
 
-    // topo de cera — CylinderGeometry
+    // topo de cera
     const velaTopo = new THREE.Mesh(new THREE.CylinderGeometry(0.108, 0.095, 0.05, 16), matWax);
     velaTopo.position.set(0, 2.88, 0);
     grupo.add(velaTopo);
 
-    // pavio — CylinderGeometry
+    // pavio
     const pavio = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.22, 8), matWick);
     pavio.position.set(0, 3.0, 0);
     grupo.add(pavio);
 
-    // chama exterior — SphereGeometry
+    // chama exterior
     const chamaExt = new THREE.Mesh(new THREE.SphereGeometry(0.105, 12, 12), matFlameOut);
     chamaExt.position.set(0, 3.12, 0);
     grupo.add(chamaExt);
 
-    // chama interior (ponta) — ConeGeometry
+    // chama interior
     const chamaInt = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.22, 12), matFlameIn);
     chamaInt.position.set(0, 3.22, 0);
     grupo.add(chamaInt);
 
-    // luz da chama (dentro do grupo, segue a escala e posição)
+    // luz da chama
     const flameLight = new THREE.PointLight(0xff8800, 1.5, 5);
     flameLight.position.set(0, 3.5, 0);
     grupo.add(flameLight);

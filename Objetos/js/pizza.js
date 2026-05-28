@@ -45,8 +45,6 @@ scene.add(lanterna.target);
 const loader = new GLTFLoader();
 loader.load('../Models/scene.glb', (gltf) => scene.add(gltf.scene));
 
-// objeto complexo — pizza de Freddy's
-// primitivas: CylinderGeometry, TorusGeometry, BoxGeometry
 function criarPizza() {
     const grupo = new THREE.Group();
 
@@ -57,28 +55,26 @@ function criarPizza() {
     const matPepper   = new THREE.MeshStandardMaterial({ color: 0x7a1208, roughness: 0.75 });
     const matPimento  = new THREE.MeshStandardMaterial({ color: 0x2a7a18, roughness: 0.8 });
 
-    // base de massa — CylinderGeometry
+    // massa
     const massa = new THREE.Mesh(new THREE.CylinderGeometry(1.82, 1.82, 0.2, 48), matMassa);
     massa.position.y = 0.1;
     grupo.add(massa);
 
-    // bordo da crosta — TorusGeometry (deitado)
+    // crosta em volta
     const crosta = new THREE.Mesh(new THREE.TorusGeometry(1.72, 0.17, 14, 64), matCrosta);
     crosta.rotation.x = Math.PI / 2;
     crosta.position.y = 0.2;
     grupo.add(crosta);
 
-    // camada de molho — CylinderGeometry
     const molho = new THREE.Mesh(new THREE.CylinderGeometry(1.56, 1.56, 0.05, 48), matMolho);
     molho.position.y = 0.225;
     grupo.add(molho);
 
-    // camada de queijo — CylinderGeometry
     const queijo = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 1.5, 0.05, 48), matQueijo);
     queijo.position.y = 0.27;
     grupo.add(queijo);
 
-    // pepperoni — CylinderGeometry ×8
+    // pepperoni espalhados
     const pepGeo = new THREE.CylinderGeometry(0.175, 0.175, 0.04, 20);
     [
         [ 0.0,   0.0 ], [ 0.72,  0.22], [-0.68,  0.30],
@@ -90,7 +86,7 @@ function criarPizza() {
         grupo.add(pep);
     });
 
-    // tiras de pimento — BoxGeometry ×3
+    // tiras de pimento
     const pimentoGeo = new THREE.BoxGeometry(0.1, 0.04, 0.42);
     [[0.35, 0.15], [-0.45, -0.28], [0.6, -0.38]].forEach(([x, z], i) => {
         const strip = new THREE.Mesh(pimentoGeo, matPimento);

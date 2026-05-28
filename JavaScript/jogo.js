@@ -15,7 +15,7 @@ let luzAmbiente = null;
 let lanterna    = null;
 let luzDirecional = null;
 
-// toggles de luz (Req. 3)
+// toggles de luz
 let _luzAmbienteOn  = true;
 let _luzPointOn     = true;
 let _luzSpotOn      = true;
@@ -47,7 +47,7 @@ let elapsedTime     = 0;
 
 let canvasMapa = null, ctxMapa = null;
 let luzesFlicker = [];
-let _chaopaandarMeshes  = [];       // apenas para collision (zonasCaminhaveis)
+let _chaopaandarMeshes  = [];
 
 // ─── INIMIGOS ──────────────────────────────────────────────────────
 let inimigos = [];
@@ -127,7 +127,7 @@ export function iniciarJogo(renderer, dificuldade = 'facil') {
             }
             return;
         }
-        // Req. 3 — toggles de luz (só durante jogo activo)
+        // teclas 1-4 só funcionam quando o jogo está a correr
         if (jogoIniciado && !estaPausado() && !introCamera && !acordando && !mensagemInicioAtiva) {
             if (e.code === 'Digit1') { _toggleLuz('ambiente');    e.preventDefault(); return; }
             if (e.code === 'Digit2') { _toggleLuz('point');       e.preventDefault(); return; }
@@ -143,6 +143,7 @@ export function iniciarJogo(renderer, dificuldade = 'facil') {
     });
     document.addEventListener('keyup', e => { keys[e.code] = false; });
 
+    // cena, câmara e renderer
     cenaJogo = new THREE.Scene();
     cenaJogo.background = new THREE.Color(0x111111);
 
@@ -153,10 +154,10 @@ export function iniciarJogo(renderer, dificuldade = 'facil') {
     renderer.shadowMap.enabled   = false;
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
 
+    // luzes
     luzAmbiente = new THREE.AmbientLight(0xffeedd, 0);
     cenaJogo.add(luzAmbiente);
 
-    // Req. 3 — DirectionalLight (tipo de luz ainda não presente)
     luzDirecional = new THREE.DirectionalLight(0xfff5e0, 0.0);
     luzDirecional.position.set(5, 20, 5);
     cenaJogo.add(luzDirecional);
@@ -177,8 +178,10 @@ export function iniciarJogo(renderer, dificuldade = 'facil') {
     // loading screen
     const loadDiv = criarLoadingScreen();
 
+    // carrega o mapa do jogo (mapa1.glb — editado no Three.js editor a partir do sketchfab)
     loader.load('./Models/mapa1.glb',
     gltf => {
+        // ajusta emissive em todos os materiais e regista bounding boxes das paredes
         gltf.scene.traverse(o => {
             if (!o.isMesh) return;
             const mats = Array.isArray(o.material) ? o.material : [o.material];
@@ -233,6 +236,7 @@ export function iniciarJogo(renderer, dificuldade = 'facil') {
         introReady    = false; // animacao bloqueada ate o loading acabar
         introProgress = 0;
 
+        // esconde o loading e arranca a animação de entrada
         loadDiv.style.transition = 'opacity 1.2s ease';
         loadDiv.style.opacity = '0';
         setTimeout(() => {
@@ -268,7 +272,7 @@ export function iniciarJogo(renderer, dificuldade = 'facil') {
             bb.expandByScalar(0.08); // cobre micro-gaps entre planes adjacentes
             zonasCaminhaveis.push(bb);
         });
-        cenaJogo.add(gltf.scene); // adicionado à cena mas invisível — colisão
+        cenaJogo.add(gltf.scene);
         criarTokens();
         _construirWaypoints();
     });
@@ -281,6 +285,7 @@ export function iniciarJogo(renderer, dificuldade = 'facil') {
         renderer.setSize(window.innerWidth, window.innerHeight);
     });
 
+    // loop principal do jogo
     function loop() {
         requestAnimationFrame(loop);
         const delta = Math.min(clock.getDelta(), 0.05);
@@ -414,6 +419,7 @@ function tentarMover(dir, step) {
     if (!colide(fZ)) { playerPos.copy(fZ); return; }
 }
 
+// movimento do jogador
 function atualizarMovimento(delta) {
     if (introCamera || acordando || mensagemInicioAtiva) return;
     let da = targetAngle - playerAngle;
@@ -442,6 +448,7 @@ function atualizarMovimento(delta) {
     });
 }
 
+// câmara e lanterna
 function atualizarCamera(delta) {
     if (introCamera || acordando || mensagemInicioAtiva) return;
 
@@ -466,7 +473,7 @@ function atualizarCamera(delta) {
     if (luzAlvo) luzAlvo.position.copy(camaraJogo.position).addScaledVector(dir, 20);
 }
 
-// ─── REQ. 3 — toggles de luz ─────────────────────────────────────────────────
+// ─── LUZES ────────────────────────────────────────────────────────────────────
 
 function _toggleLuz(tipo) {
     if (tipo === 'ambiente') {
@@ -475,8 +482,6 @@ function _toggleLuz(tipo) {
     } else if (tipo === 'point') {
         _luzPointOn = !_luzPointOn;
         luzesFlicker.forEach(item => {
-            if (item.luz.isPointLight) item.luz.intensity = _luzPointOn ? undefined : 0;
-            // undefined = devolve ao controlo do flicker; 0 = força apagada
             if (!_luzPointOn) item.luz.intensity = 0;
         });
     } else if (tipo === 'spot') {
@@ -494,7 +499,6 @@ function _toggleLuz(tipo) {
 
 function atualizarLuzesFlicker(tempo) {
     luzesFlicker.forEach(item => {
-        // respeita toggles globais
         const isPoint = item.luz.isPointLight;
         const isSpot  = item.luz.isSpotLight;
         if (isPoint && !_luzPointOn) { item.luz.intensity = 0; return; }
@@ -722,6 +726,7 @@ function criarLoadingScreen() {
     return div;
 }
 
+// minimapa
 function criarMinimapa() {
     const wrap = document.createElement('div');
     Object.assign(wrap.style, { position: 'fixed', bottom: '14px', left: '14px', zIndex: '30' });
@@ -736,6 +741,7 @@ function criarMinimapa() {
     document.body.appendChild(wrap);
 }
 
+// redesenha o minimapa
 function atualizarMinimapa() {
     if (!ctxMapa) return;
     const W = 180, H = 180, S = 4.5;
@@ -1060,22 +1066,6 @@ function _preencherGameOver(overlay, nomeInimigo) {
     btn.addEventListener('click', () => { window.location.reload(); });
 }
 
-function criarHUD() {
-    const hud = document.createElement('div');
-    Object.assign(hud.style, {
-        position: 'fixed', bottom: '14px', right: '14px', zIndex: '30',
-        color: '#886688', fontFamily: 'monospace', fontSize: '11px',
-        textAlign: 'right', pointerEvents: 'none', lineHeight: '1.8'
-    });
-    hud.innerHTML =
-        'W / ↑ — andar<br>' +
-        'A / ← — virar esq<br>' +
-        'D / → — virar dir<br>' +
-        'O &nbsp;&nbsp;&nbsp;&nbsp;— câmara ortográfica<br>' +
-        '1-4 &nbsp;— ligar/desligar luzes';
-    document.body.appendChild(hud);
-}
-
 // ─── SPAWN ZONES ──────────────────────────────────────────────────
 let spawnPalco = null; // bb do plano do palco (Freddy/Bonnie/Chica)
 let spawnCova  = null; // bb do circulo do Foxy
@@ -1101,8 +1091,7 @@ function carregarSpawnZones(floorY) {
     });
 }
 
-// corrige TODAS as matrizes de bind apos escalar um modelo com SkinnedMesh:
-// bindMatrix, bindMatrixInverse E boneInverses têm de estar alinhadas
+// sem isto os bones ficam desalinhados após escalar modelos com SkinnedMesh
 function corrigirEscalaSkinnedMesh(model) {
     model.updateMatrixWorld(true);
     model.traverse(o => {
@@ -1132,6 +1121,7 @@ function calcMinY(model) {
     return isFinite(minY) ? minY : 0;
 }
 
+// carrega os modelos dos animatrónicos (Sketchfab + Mixamo)
 function carregarPersonagens(floorY) {
     _floorY = floorY;
 

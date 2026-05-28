@@ -143,10 +143,12 @@ function Start() {
     lanterna.target = alvoLanterna;
     cena.add(lanterna);
 
+    // carrega o mapa do restaurante (scene.glb — editado no Three.js editor)
     const loader = new GLTFLoader();
     loader.load('./Models/scene.glb', (gltf) => {
         cena.add(gltf.scene);
 
+        // olhos brancos do Freddy que aparecem nas câmeras de segurança
         const geoPupila = new THREE.SphereGeometry(0.12, 16, 16);
         const matPupila = new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false, transparent: true });
         [[17.30, 12.70, 12.20], [16.45, 12.60, 12.90]].forEach(([x, y, z]) => {
@@ -156,6 +158,7 @@ function Start() {
             cena.add(p);
         });
 
+        // menu em neon (sprites de texto criados em canvas)
         const menu = criarMenuNeon(cena);
         btnStart        = menu.btnStart;
         btnOptions      = menu.btnOptions;
@@ -163,6 +166,7 @@ function Start() {
         botoesClicaveis = menu.botoesClicaveis;
         spritesPacman   = menu.spritesPacman;
 
+        // objetos complexos: cupcake, golden freddy, pizza, câmeras, ventoinha, painel
         objetosCena = criarObjetosComplexos(cena);
     });
 

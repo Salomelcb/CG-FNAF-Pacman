@@ -88,7 +88,6 @@ export function setCoracaoFactor(f) {
     s.a.playbackRate = Math.min(3.2, 1.4 + (_coracaoFactor - 1.0) * 0.6);
 }
 
-// pausa sons ambientais/música quando abre opções ou pausa
 export function pausarAmbientais() {
     ['coracao', 'luzFlicker', 'menuTema', 'passosHeavy', 'phoneguy'].forEach(id => {
         const s = _reg[id];
@@ -96,7 +95,6 @@ export function pausarAmbientais() {
     });
 }
 
-// retoma apenas os que foram pausados por pausarAmbientais
 // passosHeavy NÃO é retomado aqui — é gerido pelo movimento do jogador
 export function retomarAmbientais() {
     ['coracao', 'luzFlicker', 'menuTema', 'phoneguy'].forEach(id => {

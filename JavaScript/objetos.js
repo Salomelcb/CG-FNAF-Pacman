@@ -136,8 +136,7 @@ function criarCupcakeObj(cena) {
 
     const texLoader = new THREE.TextureLoader();
 
-    // textura do embrulho: pregas cilíndricas com highlight forte no centro
-    // cor base laranja-castanho quente, vincos escuros, highlight creme no pico
+    // textura do embrulho — desenhada em canvas com as pregas castanhas
     const cvW = document.createElement('canvas');
     cvW.width = 512; cvW.height = 512;
     const ctxW = cvW.getContext('2d');
@@ -149,13 +148,12 @@ function criarCupcakeObj(cena) {
         g.addColorStop(0.00, 'rgba(0,0,0,0.82)');
         g.addColorStop(0.12, 'rgba(15,3,0,0.60)');
         g.addColorStop(0.32, 'rgba(180,70,20,0.45)');
-        g.addColorStop(0.50, 'rgba(245,145,80,0.88)');   // highlight quente no centro
+        g.addColorStop(0.50, 'rgba(245,145,80,0.88)');
         g.addColorStop(0.68, 'rgba(170,62,15,0.45)');
         g.addColorStop(0.88, 'rgba(15,3,0,0.60)');
         g.addColorStop(1.00, 'rgba(0,0,0,0.82)');
         ctxW.fillStyle = g; ctxW.fillRect(i * rW, 0, rW, 512);
     }
-    // vinheta vertical: escurece topo e fundo do embrulho
     const gv = ctxW.createLinearGradient(0, 0, 0, 512);
     gv.addColorStop(0,    'rgba(0,0,0,0.45)');
     gv.addColorStop(0.18, 'rgba(0,0,0,0.05)');
@@ -169,7 +167,7 @@ function criarCupcakeObj(cena) {
     texVela.wrapS = THREE.RepeatWrapping;
     texVela.wrapT = THREE.RepeatWrapping;
 
-    // corpocupcake.png = embrulho (wrapper) — volta ao sítio certo
+    // materiais
     const matWrapper = new THREE.MeshStandardMaterial({ map: texCorpo, roughness: 0.85 });
 
     const matFrost = new THREE.MeshStandardMaterial({
@@ -194,8 +192,7 @@ function criarCupcakeObj(cena) {
     wrapper.position.y = 0.45;
     grupo.add(wrapper);
 
-    // cúpula rosa — thetaLength reduzido para o dome terminar onde o tubo começa
-    // dome bottom: y = 0.90 + 1.1*cos(0.53π) ≈ 0.80, onde o tubo cobre completamente
+    // cúpula rosa
     const frostDome = new THREE.Mesh(
         new THREE.SphereGeometry(1.1, 32, 24, 0, Math.PI * 2, 0, Math.PI * 0.53),
         matFrostDome
@@ -203,7 +200,7 @@ function criarCupcakeObj(cena) {
     frostDome.position.y = 0.90;
     grupo.add(frostDome);
 
-    // ondas do creme — tubo mais dentro do dome (r=1.01), projeção suave de ~0.04
+    // ondas do creme
     const glaceCurve = new (class extends THREE.Curve {
         getPoint(t, out = new THREE.Vector3()) {
             const a = t * Math.PI * 2;
@@ -219,6 +216,7 @@ function criarCupcakeObj(cena) {
         matFrost
     ));
 
+    // olhos — cada olho tem várias camadas (sclera, íris, pupila, brilho)
     function criarOlho(xOff) {
         const g = new THREE.Group();
 
